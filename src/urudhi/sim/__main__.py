@@ -22,9 +22,16 @@ def main() -> None:
     parser.add_argument("--count", type=int, default=120)
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--out", type=Path, default=Path("data/report.json"))
+    parser.add_argument("--db", default=":memory:",
+                        help="persist the run's ledger and audit chain to this "
+                             "SQLite file (serve it with python -m urudhi.api)")
     args = parser.parse_args()
 
-    result = run_batch(RunConfig(days=args.days, count=args.count, seed=args.seed))
+    if args.db != ":memory:" and Path(args.db).exists():
+        Path(args.db).unlink()  # a run is a fresh world; stale state would lie
+    result = run_batch(
+        RunConfig(days=args.days, count=args.count, seed=args.seed), db_path=args.db
+    )
     report = build_report(result)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
