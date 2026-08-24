@@ -39,6 +39,30 @@ docs/             architecture, metrics methodology
 tests/            pytest suite
 ```
 
-## Status
+## Measured results (seeded batch, re-runnable)
 
-Under active development.
+120 synthetic overdue invoices, 21 simulated days, seed 2026:
+
+| Metric | Value |
+|---|---|
+| Outstanding | ₹1,51,82,800 |
+| **Recovered — observed via webhooks** | **₹90,68,100 (59.7%)** |
+| Promises recorded | 98 — 62 kept, 36 broken |
+| Unresolved (full exception list in report) | 40 invoices |
+| Audit events | 1,201 — hash chain verified |
+
+Recovery is deliberately not higher: after two broken promises the agent
+escalates to a human instead of chasing harder. Reproduce with
+`python -m urudhi.sim` — same seed, same numbers.
+
+## Quickstart
+
+```bash
+python -m venv .venv && .venv/bin/pip install -e ".[dev]"
+.venv/bin/pytest -q                                  # 126 tests
+.venv/bin/python -m urudhi.sim --db data/run.sqlite3 # run the batch
+.venv/bin/python -m urudhi.api --db data/run.sqlite3 # serve it
+cd dashboard && npm install && npm run dev           # dashboard on :5173
+```
+
+See [docs/architecture.md](docs/architecture.md) for the design.
