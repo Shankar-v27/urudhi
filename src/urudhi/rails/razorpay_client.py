@@ -69,6 +69,7 @@ class RazorpayRails:
             "currency": "INR",
             "description": description,
             "reference_id": reference_id,
+            "notes": {"invoice_id": reference_id},
             "customer": {
                 "name": customer_name,
                 "email": customer_email,
