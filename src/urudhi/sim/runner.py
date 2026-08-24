@@ -67,6 +67,8 @@ def _rank_ids(store: Store, policy: PolicyConfig, today: date) -> list[str]:
 
     scores = []
     for invoice in chaseable(store):
+        if store.open_promise_for(invoice.id) is not None:
+            continue  # a promise is running; chasing over it burns goodwill
         promises = store.promises_for(invoice.id)
         attempts = sum(
             1 for e in store.audit_events()

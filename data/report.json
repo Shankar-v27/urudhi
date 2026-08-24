@@ -14,42 +14,42 @@
       "max_attempts_per_day": 1,
       "escalate_after_broken_promises": 2,
       "allowed_channels": [
-        "whatsapp",
-        "email"
+        "email",
+        "whatsapp"
       ]
     }
   },
   "money": {
     "outstanding_paise": 1518280000,
-    "recovered_paise": 1100760000,
+    "recovered_paise": 906810000,
     "outstanding_inr": "₹1,51,82,800.00",
-    "recovered_inr": "₹1,10,07,600.00",
-    "recovery_rate": 0.725
+    "recovered_inr": "₹90,68,100.00",
+    "recovery_rate": 0.5973
   },
   "invoices_by_state": {
     "outstanding": 0,
     "promised": 0,
     "partially_paid": 0,
-    "paid": 98,
+    "paid": 80,
     "disputed": 9,
-    "escalated": 10,
+    "escalated": 28,
     "stop_contact": 3
   },
   "promises": {
-    "made": 216,
+    "made": 98,
     "open": 0,
-    "kept": 80,
+    "kept": 62,
     "partially_kept": 0,
-    "broken": 1,
-    "superseded": 135,
+    "broken": 36,
+    "superseded": 0,
     "withdrawn": 0,
-    "kept_rate_of_resolved": 0.9877
+    "kept_rate_of_resolved": 0.6327
   },
   "contact": {
-    "messages_sent": 390,
-    "replies_received": 330,
-    "gates_blocked": 18,
-    "offers_made": 64
+    "messages_sent": 272,
+    "replies_received": 212,
+    "gates_blocked": 28,
+    "offers_made": 24
   },
   "exceptions": [
     {
@@ -74,11 +74,25 @@
       "archetype": "ghost"
     },
     {
+      "invoice_id": "inv_118",
+      "state": "escalated",
+      "balance": 58550000,
+      "balance_inr": "₹5,85,500.00",
+      "archetype": "promise_breaker"
+    },
+    {
       "invoice_id": "inv_075",
       "state": "escalated",
       "balance": 45850000,
       "balance_inr": "₹4,58,500.00",
       "archetype": "ghost"
+    },
+    {
+      "invoice_id": "inv_112",
+      "state": "escalated",
+      "balance": 43970000,
+      "balance_inr": "₹4,39,700.00",
+      "archetype": "promise_breaker"
     },
     {
       "invoice_id": "inv_101",
@@ -102,6 +116,13 @@
       "archetype": "stop_requester"
     },
     {
+      "invoice_id": "inv_042",
+      "state": "escalated",
+      "balance": 19910000,
+      "balance_inr": "₹1,99,100.00",
+      "archetype": "promise_breaker"
+    },
+    {
       "invoice_id": "inv_087",
       "state": "disputed",
       "balance": 18680000,
@@ -116,11 +137,39 @@
       "archetype": "stop_requester"
     },
     {
+      "invoice_id": "inv_015",
+      "state": "escalated",
+      "balance": 11950000,
+      "balance_inr": "₹1,19,500.00",
+      "archetype": "promise_breaker"
+    },
+    {
+      "invoice_id": "inv_107",
+      "state": "escalated",
+      "balance": 10850000,
+      "balance_inr": "₹1,08,500.00",
+      "archetype": "promise_breaker"
+    },
+    {
       "invoice_id": "inv_115",
       "state": "escalated",
       "balance": 10640000,
       "balance_inr": "₹1,06,400.00",
       "archetype": "ghost"
+    },
+    {
+      "invoice_id": "inv_074",
+      "state": "escalated",
+      "balance": 10560000,
+      "balance_inr": "₹1,05,600.00",
+      "archetype": "promise_breaker"
+    },
+    {
+      "invoice_id": "inv_110",
+      "state": "escalated",
+      "balance": 9320000,
+      "balance_inr": "₹93,200.00",
+      "archetype": "promise_breaker"
     },
     {
       "invoice_id": "inv_029",
@@ -130,6 +179,20 @@
       "archetype": "disputer"
     },
     {
+      "invoice_id": "inv_099",
+      "state": "escalated",
+      "balance": 8030000,
+      "balance_inr": "₹80,300.00",
+      "archetype": "promise_breaker"
+    },
+    {
+      "invoice_id": "inv_106",
+      "state": "escalated",
+      "balance": 7580000,
+      "balance_inr": "₹75,800.00",
+      "archetype": "promise_breaker"
+    },
+    {
       "invoice_id": "inv_043",
       "state": "escalated",
       "balance": 5760000,
@@ -137,11 +200,39 @@
       "archetype": "ghost"
     },
     {
+      "invoice_id": "inv_037",
+      "state": "escalated",
+      "balance": 3070000,
+      "balance_inr": "₹30,700.00",
+      "archetype": "promise_breaker"
+    },
+    {
       "invoice_id": "inv_027",
       "state": "escalated",
       "balance": 3030000,
       "balance_inr": "₹30,300.00",
       "archetype": "ghost"
+    },
+    {
+      "invoice_id": "inv_045",
+      "state": "escalated",
+      "balance": 2540000,
+      "balance_inr": "₹25,400.00",
+      "archetype": "promise_breaker"
+    },
+    {
+      "invoice_id": "inv_117",
+      "state": "escalated",
+      "balance": 2520000,
+      "balance_inr": "₹25,200.00",
+      "archetype": "promise_breaker"
+    },
+    {
+      "invoice_id": "inv_060",
+      "state": "escalated",
+      "balance": 1950000,
+      "balance_inr": "₹19,500.00",
+      "archetype": "promise_breaker"
     },
     {
       "invoice_id": "inv_028",
@@ -179,6 +270,20 @@
       "archetype": "disputer"
     },
     {
+      "invoice_id": "inv_049",
+      "state": "escalated",
+      "balance": 970000,
+      "balance_inr": "₹9,700.00",
+      "archetype": "promise_breaker"
+    },
+    {
+      "invoice_id": "inv_034",
+      "state": "escalated",
+      "balance": 950000,
+      "balance_inr": "₹9,500.00",
+      "archetype": "promise_breaker"
+    },
+    {
       "invoice_id": "inv_010",
       "state": "disputed",
       "balance": 760000,
@@ -193,11 +298,32 @@
       "archetype": "disputer"
     },
     {
+      "invoice_id": "inv_050",
+      "state": "escalated",
+      "balance": 580000,
+      "balance_inr": "₹5,800.00",
+      "archetype": "promise_breaker"
+    },
+    {
       "invoice_id": "inv_079",
       "state": "stop_contact",
       "balance": 400000,
       "balance_inr": "₹4,000.00",
       "archetype": "stop_requester"
+    },
+    {
+      "invoice_id": "inv_102",
+      "state": "escalated",
+      "balance": 370000,
+      "balance_inr": "₹3,700.00",
+      "archetype": "promise_breaker"
+    },
+    {
+      "invoice_id": "inv_032",
+      "state": "escalated",
+      "balance": 280000,
+      "balance_inr": "₹2,800.00",
+      "archetype": "promise_breaker"
     },
     {
       "invoice_id": "inv_044",
@@ -208,7 +334,7 @@
     }
   ],
   "audit": {
-    "events": 1715,
+    "events": 1201,
     "chain_verified": true
   }
 }
