@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
 
 from urudhi.agent.brain import Brain, MockBrain
-from urudhi.agent.loop import Action, Outbox, RecoveryAgent, chaseable
+from urudhi.agent.loop import Action, RecoveryAgent, chaseable
 from urudhi.agent.policy import Offer, OfferType, PolicyConfig
 from urudhi.audit.log import Actor, EventKind
 from urudhi.ledger.models import Channel, Debtor

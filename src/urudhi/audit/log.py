@@ -71,7 +71,7 @@ class AuditEvent(BaseModel):
     def compute_hash(self) -> str:
         return hashlib.sha256(self.canonical().encode("utf-8")).hexdigest()
 
-    def sealed(self) -> "AuditEvent":
+    def sealed(self) -> AuditEvent:
         return self.model_copy(update={"hash": self.compute_hash()})
 
 

@@ -47,11 +47,11 @@ class GateDecision(BaseModel):
     reason: str
 
     @classmethod
-    def allow(cls, gate: str, reason: str) -> "GateDecision":
+    def allow(cls, gate: str, reason: str) -> GateDecision:
         return cls(allowed=True, gate=gate, reason=reason)
 
     @classmethod
-    def block(cls, gate: str, reason: str) -> "GateDecision":
+    def block(cls, gate: str, reason: str) -> GateDecision:
         return cls(allowed=False, gate=gate, reason=reason)
 
 

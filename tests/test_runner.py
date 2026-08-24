@@ -4,7 +4,6 @@ import pytest
 
 from urudhi.audit.log import verify_chain
 from urudhi.ledger.models import InvoiceState
-from urudhi.sim.batch import archetype_of
 from urudhi.sim.personas import Archetype
 from urudhi.sim.report import build_report
 from urudhi.sim.runner import RunConfig, run_batch

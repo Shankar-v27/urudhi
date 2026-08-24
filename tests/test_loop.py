@@ -87,7 +87,7 @@ class TestHappyPath:
 class TestBrokenPromisesEscalate:
     def test_two_broken_promises_hand_over_to_human(self, agent, store):
         day = datetime(2026, 8, 24, 11, 0, tzinfo=UTC)
-        for i in range(2):
+        for _ in range(2):
             agent.chase("inv_1", day)
             agent.handle_reply("inv_1", "will pay ₹2,500 in 2 days", day)
             day = day.replace(day=day.day + 3)
