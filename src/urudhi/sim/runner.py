@@ -160,7 +160,10 @@ def run_batch(
                 agent.handle_reply(invoice_id, reply.text, now + timedelta(hours=2))
             if reply.pays_paise > 0:
                 already_paid = store.get_invoice(invoice_id).amount_paid
-                remaining = case.invoice.amount - already_paid
+                already_queued = sum(
+                    p.amount for p in pending if p.invoice_id == invoice_id
+                )
+                remaining = case.invoice.amount - already_paid - already_queued
                 amount = min(reply.pays_paise, remaining)
                 if amount > 0:
                     pending.append(PendingPayment(
