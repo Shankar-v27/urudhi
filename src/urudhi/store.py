@@ -73,7 +73,10 @@ CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id);
 
 class Store:
     def __init__(self, path: str | Path = ":memory:") -> None:
-        self._conn = sqlite3.connect(str(path))
+        # check_same_thread=False: FastAPI serves sync endpoints from a worker
+        # threadpool. Access is one-request-at-a-time in this app, and sqlite3
+        # serializes at the C level; this only lifts the same-thread assertion.
+        self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
