@@ -81,8 +81,17 @@ def record_payment(
     observed since the open promise was made. A promise is KEPT only when the
     committed amount has arrived on or before the committed date — partial
     money keeps it OPEN until :func:`expire_promise` rules on it.
+
+    Unlike every other event, payments are accepted in *any* state except
+    PAID: money observed on the rails is a fact to record, even for invoices
+    a human owns (escalated, disputed) or where contact has stopped. A
+    partial payment never pulls a hands-off invoice back into the chase
+    pool — only clearing the balance changes its state, to PAID.
     """
-    _require_active(invoice, "record a payment")
+    if invoice.state is InvoiceState.PAID:
+        raise InvalidTransition(
+            f"invoice {invoice.id} is already settled; refusing further payments"
+        )
     if payment.invoice_id != invoice.id:
         raise InvalidTransition(
             f"payment {payment.id} is for invoice {payment.invoice_id}, not {invoice.id}"
@@ -96,7 +105,12 @@ def record_payment(
         )
 
     amount_paid = invoice.amount_paid + payment.amount
-    new_state = InvoiceState.PAID if amount_paid == invoice.amount else InvoiceState.PARTIALLY_PAID
+    if amount_paid == invoice.amount:
+        new_state = InvoiceState.PAID
+    elif invoice.state in HANDS_OFF_STATES:
+        new_state = invoice.state  # a human owns it; partial money changes nothing
+    else:
+        new_state = InvoiceState.PARTIALLY_PAID
 
     resolved_promise = None
     if open_promise is not None and open_promise.state is PromiseState.OPEN:

@@ -135,6 +135,22 @@ class TestRecordPayment:
         assert invoice.state is InvoiceState.PAID
         assert resolved.state is PromiseState.PARTIALLY_KEPT
 
+    def test_payment_on_escalated_invoice_is_recorded(self):
+        escalated = make_invoice(state=InvoiceState.ESCALATED)
+        invoice, _ = record_payment(escalated, make_payment())
+        assert invoice.state is InvoiceState.PAID
+
+    def test_partial_payment_keeps_hands_off_state(self):
+        escalated = make_invoice(state=InvoiceState.ESCALATED)
+        invoice, _ = record_payment(escalated, make_payment(amount=40_000))
+        assert invoice.state is InvoiceState.ESCALATED
+        assert invoice.balance == 60_000
+
+    def test_payment_on_settled_invoice_rejected(self):
+        paid = make_invoice(state=InvoiceState.PAID, amount_paid=100_000)
+        with pytest.raises(InvalidTransition, match="already settled"):
+            record_payment(paid, make_payment())
+
     def test_overpayment_rejected(self):
         with pytest.raises(InvalidTransition, match="overpay"):
             record_payment(make_invoice(amount_paid=90_000), make_payment(amount=20_000))
