@@ -1,0 +1,214 @@
+{
+  "run": {
+    "days": 21,
+    "invoices": 120,
+    "seed": 2026,
+    "policy": {
+      "max_discount_bps": 500,
+      "max_installments": 3,
+      "min_installment": 100000,
+      "max_promise_horizon_days": 30,
+      "contact_open": "10:00:00",
+      "contact_close": "19:00:00",
+      "max_attempts_per_invoice": 6,
+      "max_attempts_per_day": 1,
+      "escalate_after_broken_promises": 2,
+      "allowed_channels": [
+        "whatsapp",
+        "email"
+      ]
+    }
+  },
+  "money": {
+    "outstanding_paise": 1518280000,
+    "recovered_paise": 1100760000,
+    "outstanding_inr": "₹1,51,82,800.00",
+    "recovered_inr": "₹1,10,07,600.00",
+    "recovery_rate": 0.725
+  },
+  "invoices_by_state": {
+    "outstanding": 0,
+    "promised": 0,
+    "partially_paid": 0,
+    "paid": 98,
+    "disputed": 9,
+    "escalated": 10,
+    "stop_contact": 3
+  },
+  "promises": {
+    "made": 216,
+    "open": 0,
+    "kept": 80,
+    "partially_kept": 0,
+    "broken": 1,
+    "superseded": 135,
+    "withdrawn": 0,
+    "kept_rate_of_resolved": 0.9877
+  },
+  "contact": {
+    "messages_sent": 390,
+    "replies_received": 330,
+    "gates_blocked": 18,
+    "offers_made": 64
+  },
+  "exceptions": [
+    {
+      "invoice_id": "inv_052",
+      "state": "escalated",
+      "balance": 70170000,
+      "balance_inr": "₹7,01,700.00",
+      "archetype": "ghost"
+    },
+    {
+      "invoice_id": "inv_004",
+      "state": "disputed",
+      "balance": 64970000,
+      "balance_inr": "₹6,49,700.00",
+      "archetype": "disputer"
+    },
+    {
+      "invoice_id": "inv_013",
+      "state": "escalated",
+      "balance": 62500000,
+      "balance_inr": "₹6,25,000.00",
+      "archetype": "ghost"
+    },
+    {
+      "invoice_id": "inv_075",
+      "state": "escalated",
+      "balance": 45850000,
+      "balance_inr": "₹4,58,500.00",
+      "archetype": "ghost"
+    },
+    {
+      "invoice_id": "inv_101",
+      "state": "disputed",
+      "balance": 35310000,
+      "balance_inr": "₹3,53,100.00",
+      "archetype": "disputer"
+    },
+    {
+      "invoice_id": "inv_104",
+      "state": "disputed",
+      "balance": 34850000,
+      "balance_inr": "₹3,48,500.00",
+      "archetype": "disputer"
+    },
+    {
+      "invoice_id": "inv_054",
+      "state": "stop_contact",
+      "balance": 34830000,
+      "balance_inr": "₹3,48,300.00",
+      "archetype": "stop_requester"
+    },
+    {
+      "invoice_id": "inv_087",
+      "state": "disputed",
+      "balance": 18680000,
+      "balance_inr": "₹1,86,800.00",
+      "archetype": "disputer"
+    },
+    {
+      "invoice_id": "inv_020",
+      "state": "stop_contact",
+      "balance": 14150000,
+      "balance_inr": "₹1,41,500.00",
+      "archetype": "stop_requester"
+    },
+    {
+      "invoice_id": "inv_115",
+      "state": "escalated",
+      "balance": 10640000,
+      "balance_inr": "₹1,06,400.00",
+      "archetype": "ghost"
+    },
+    {
+      "invoice_id": "inv_029",
+      "state": "disputed",
+      "balance": 8240000,
+      "balance_inr": "₹82,400.00",
+      "archetype": "disputer"
+    },
+    {
+      "invoice_id": "inv_043",
+      "state": "escalated",
+      "balance": 5760000,
+      "balance_inr": "₹57,600.00",
+      "archetype": "ghost"
+    },
+    {
+      "invoice_id": "inv_027",
+      "state": "escalated",
+      "balance": 3030000,
+      "balance_inr": "₹30,300.00",
+      "archetype": "ghost"
+    },
+    {
+      "invoice_id": "inv_028",
+      "state": "escalated",
+      "balance": 1640000,
+      "balance_inr": "₹16,400.00",
+      "archetype": "ghost"
+    },
+    {
+      "invoice_id": "inv_100",
+      "state": "disputed",
+      "balance": 1340000,
+      "balance_inr": "₹13,400.00",
+      "archetype": "disputer"
+    },
+    {
+      "invoice_id": "inv_033",
+      "state": "escalated",
+      "balance": 1300000,
+      "balance_inr": "₹13,000.00",
+      "archetype": "ghost"
+    },
+    {
+      "invoice_id": "inv_030",
+      "state": "escalated",
+      "balance": 1160000,
+      "balance_inr": "₹11,600.00",
+      "archetype": "ghost"
+    },
+    {
+      "invoice_id": "inv_108",
+      "state": "disputed",
+      "balance": 990000,
+      "balance_inr": "₹9,900.00",
+      "archetype": "disputer"
+    },
+    {
+      "invoice_id": "inv_010",
+      "state": "disputed",
+      "balance": 760000,
+      "balance_inr": "₹7,600.00",
+      "archetype": "disputer"
+    },
+    {
+      "invoice_id": "inv_103",
+      "state": "disputed",
+      "balance": 700000,
+      "balance_inr": "₹7,000.00",
+      "archetype": "disputer"
+    },
+    {
+      "invoice_id": "inv_079",
+      "state": "stop_contact",
+      "balance": 400000,
+      "balance_inr": "₹4,000.00",
+      "archetype": "stop_requester"
+    },
+    {
+      "invoice_id": "inv_044",
+      "state": "escalated",
+      "balance": 250000,
+      "balance_inr": "₹2,500.00",
+      "archetype": "ghost"
+    }
+  ],
+  "audit": {
+    "events": 1715,
+    "chain_verified": true
+  }
+}
