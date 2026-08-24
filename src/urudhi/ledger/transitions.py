@@ -113,9 +113,6 @@ def record_payment(
                 update={"state": PromiseState.PARTIALLY_KEPT, "resolved_at": payment.observed_at}
             )
 
-    if new_state is InvoiceState.PAID and resolved_promise is None:
-        pass  # no open promise to resolve; invoice simply closes
-
     updated_invoice = invoice.model_copy(
         update={"amount_paid": amount_paid, "state": new_state}
     )
