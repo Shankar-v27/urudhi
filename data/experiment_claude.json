@@ -1,0 +1,314 @@
+{
+  "generated_by": "python -m urudhi.sim --brain claude --arms all --days 14 --count 20 --seed 2026",
+  "seed": 2026,
+  "days": 14,
+  "count": 20,
+  "brain": "claude",
+  "policy": {
+    "max_discount_bps": 500,
+    "max_installments": 3,
+    "min_installment": 100000,
+    "max_promise_horizon_days": 30,
+    "min_discount_days_overdue": 14,
+    "min_installment_balance": 500000,
+    "timezone": "Asia/Kolkata",
+    "contact_open": "10:00:00",
+    "contact_close": "19:00:00",
+    "max_attempts_per_invoice": 6,
+    "max_attempts_per_day": 1,
+    "min_days_between_contacts": 2,
+    "escalate_after_broken_promises": 2,
+    "recommended_escalation_min_broken": 1,
+    "allowed_channels": [
+      "email",
+      "whatsapp"
+    ]
+  },
+  "arms": {
+    "no_action": {
+      "label": "No action",
+      "arm": "no_action",
+      "brain": "none",
+      "invoices": 20,
+      "amount_at_risk_paise": 338340000,
+      "recovered_paise": 43270000,
+      "recovery_rate": 0.1279,
+      "discount_cost_paise": 0,
+      "net_recovered_paise": 43270000,
+      "invoices_paid": 4,
+      "promises_made": 0,
+      "promises_kept": 0,
+      "promises_broken": 0,
+      "promises_partially_kept": 0,
+      "promise_kept_rate": null,
+      "escalations": 0,
+      "disputes": 0,
+      "stop_contacts": 0,
+      "contact_attempts": 0,
+      "replies_received": 0,
+      "offers_made": 0,
+      "offers_accepted": 0,
+      "offers_settled": 0,
+      "offers_expired": 0,
+      "gates_blocked": 0,
+      "proposals_modified": 0,
+      "brain_deferrals": 0,
+      "days_to_recovery_median": 11.0,
+      "days_to_recovery_mean": 8.75,
+      "days_to_recovery_histogram": {
+        "0-3": 1,
+        "4-7": 0,
+        "8-14": 3,
+        "15-21": 0,
+        "22+": 0
+      },
+      "audit_events": 6
+    },
+    "baseline": {
+      "label": "Fixed-cadence baseline",
+      "arm": "baseline",
+      "brain": "none",
+      "invoices": 20,
+      "amount_at_risk_paise": 338340000,
+      "recovered_paise": 200066900,
+      "recovery_rate": 0.5913,
+      "discount_cost_paise": 0,
+      "net_recovered_paise": 200066900,
+      "invoices_paid": 11,
+      "promises_made": 0,
+      "promises_kept": 0,
+      "promises_broken": 0,
+      "promises_partially_kept": 0,
+      "promise_kept_rate": null,
+      "escalations": 0,
+      "disputes": 0,
+      "stop_contacts": 1,
+      "contact_attempts": 61,
+      "replies_received": 39,
+      "offers_made": 0,
+      "offers_accepted": 0,
+      "offers_settled": 0,
+      "offers_expired": 0,
+      "gates_blocked": 0,
+      "proposals_modified": 0,
+      "brain_deferrals": 0,
+      "days_to_recovery_median": 2,
+      "days_to_recovery_mean": 3.55,
+      "days_to_recovery_histogram": {
+        "0-3": 8,
+        "4-7": 1,
+        "8-14": 2,
+        "15-21": 0,
+        "22+": 0
+      },
+      "audit_events": 118
+    },
+    "urudhi": {
+      "label": "Urudhi (claude brain)",
+      "arm": "urudhi",
+      "brain": "claude",
+      "invoices": 20,
+      "amount_at_risk_paise": 338340000,
+      "recovered_paise": 229405500,
+      "recovery_rate": 0.678,
+      "discount_cost_paise": 16000,
+      "net_recovered_paise": 229389500,
+      "invoices_paid": 9,
+      "promises_made": 19,
+      "promises_kept": 14,
+      "promises_broken": 2,
+      "promises_partially_kept": 0,
+      "promise_kept_rate": 0.875,
+      "escalations": 2,
+      "disputes": 1,
+      "stop_contacts": 2,
+      "contact_attempts": 45,
+      "replies_received": 31,
+      "offers_made": 4,
+      "offers_accepted": 2,
+      "offers_settled": 1,
+      "offers_expired": 1,
+      "gates_blocked": 29,
+      "proposals_modified": 7,
+      "brain_deferrals": 0,
+      "days_to_recovery_median": 3,
+      "days_to_recovery_mean": 4.11,
+      "days_to_recovery_histogram": {
+        "0-3": 5,
+        "4-7": 3,
+        "8-14": 1,
+        "15-21": 0,
+        "22+": 0
+      },
+      "audit_events": 495
+    }
+  },
+  "uplift": {
+    "urudhi_vs_baseline_paise": 29338600,
+    "urudhi_vs_baseline_points": 8.67,
+    "urudhi_vs_no_action_paise": 186135500,
+    "urudhi_vs_no_action_points": 55.01,
+    "net_urudhi_vs_baseline_paise": 29322600
+  },
+  "attribution": {
+    "window_days": 7,
+    "rule": "A payment is attributed to the most recent message sent on the same invoice within the previous 7 days; otherwise it is unattributed (spontaneous, or outside the window). This is an accounting rule, not a causal claim.",
+    "arms": {
+      "baseline": {
+        "by_intervention": {
+          "reminder": {
+            "payments": 15,
+            "paise": 200066900
+          }
+        },
+        "unattributed": {
+          "payments": 0,
+          "paise": 0
+        }
+      },
+      "urudhi": {
+        "by_intervention": {
+          "installment_offer": {
+            "payments": 1,
+            "paise": 383200
+          },
+          "reminder": {
+            "payments": 9,
+            "paise": 129956200
+          },
+          "discount_offer": {
+            "payments": 1,
+            "paise": 384000
+          },
+          "request_promise": {
+            "payments": 2,
+            "paise": 73435400
+          },
+          "payment_link": {
+            "payments": 2,
+            "paise": 24876700
+          }
+        },
+        "unattributed": {
+          "payments": 1,
+          "paise": 370000
+        }
+      }
+    }
+  },
+  "timeline": {
+    "days": [
+      "2026-08-24",
+      "2026-08-25",
+      "2026-08-26",
+      "2026-08-27",
+      "2026-08-28",
+      "2026-08-29",
+      "2026-08-30",
+      "2026-08-31",
+      "2026-09-01",
+      "2026-09-02",
+      "2026-09-03",
+      "2026-09-04",
+      "2026-09-05",
+      "2026-09-06",
+      "2026-09-07"
+    ],
+    "no_action": [
+      0,
+      310000,
+      310000,
+      310000,
+      310000,
+      310000,
+      310000,
+      310000,
+      310000,
+      310000,
+      310000,
+      1650000,
+      43270000,
+      43270000,
+      43270000
+    ],
+    "baseline": [
+      0,
+      57546900,
+      68926000,
+      189436000,
+      189436000,
+      198749400,
+      198749400,
+      198749400,
+      198749400,
+      198749400,
+      199476200,
+      200066900,
+      200066900,
+      200066900,
+      200066900
+    ],
+    "urudhi": [
+      0,
+      310000,
+      56289800,
+      139916700,
+      140456000,
+      140796000,
+      140796000,
+      189376000,
+      214231400,
+      229021500,
+      229405500,
+      229405500,
+      229405500,
+      229405500,
+      229405500
+    ]
+  },
+  "days_to_recovery": {
+    "no_action": {
+      "median": 11.0,
+      "mean": 8.75,
+      "histogram": {
+        "0-3": 1,
+        "4-7": 0,
+        "8-14": 3,
+        "15-21": 0,
+        "22+": 0
+      }
+    },
+    "baseline": {
+      "median": 2,
+      "mean": 3.55,
+      "histogram": {
+        "0-3": 8,
+        "4-7": 1,
+        "8-14": 2,
+        "15-21": 0,
+        "22+": 0
+      }
+    },
+    "urudhi": {
+      "median": 3,
+      "mean": 4.11,
+      "histogram": {
+        "0-3": 5,
+        "4-7": 3,
+        "8-14": 1,
+        "15-21": 0,
+        "22+": 0
+      }
+    }
+  },
+  "sensitivity": [],
+  "caveats": [
+    "Every figure is a simulation result from the persona model in sim/personas.py; no real-world recovery rate is claimed.",
+    "Debtor behaviour reacts to the intervention received (link, discount, installment plan, request for a promise, contact fatigue); the trait ranges are stated in code and can be disputed.",
+    "The three arms start from byte-identical portfolios and debtor traits; differences between arms are differences in strategy under this model, not causal evidence about real debtors.",
+    "Recovered = sum of webhook-observed payments only. Discount cost = amounts waived under settled concessions. Net = recovered − waived.",
+    "A payment is attributed to the most recent message sent on the same invoice within the previous 7 days; otherwise it is unattributed (spontaneous, or outside the window). This is an accounting rule, not a causal claim.",
+    "Sensitivity runs use the deterministic mock brain so the policy effect is isolated from LLM variance.",
+    "With --brain claude the Urudhi arm is not byte-reproducible: model outputs vary."
+  ]
+}

@@ -17,5 +17,23 @@ jobs:
         run: pip install -e ".[dev]" httpx
       - name: Lint
         run: ruff check src tests
-      - name: Test
+      - name: Test (offline; mock brain)
         run: pytest -q
+      - name: Reproduce the seeded batch
+        run: |
+          python -m urudhi.sim --brain mock --arms all --no-sensitivity --out /tmp/report.json --experiment-out /tmp/experiment.json
+          python -m urudhi.eval_replies --brain mock --out /tmp/eval.json
+
+  dashboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm ci
+      - run: npx tsc -b --pretty false
+      - run: npx vite build

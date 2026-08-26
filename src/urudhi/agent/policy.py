@@ -1,21 +1,28 @@
 """Bounded authority: the deterministic gates around the negotiating agent.
 
 The LLM proposes; policy disposes. Every consequential action — contacting a
-debtor, making a concession, accepting a promise — passes through a gate here,
-and every gate returns a :class:`GateDecision` with a machine-checkable reason,
-so "every money action explainable, bounded and gated" is an architecture
-property, not a prompt instruction. Gates are pure functions of config and
-facts; they contain no model calls and no I/O.
+debtor, making a concession, accepting a promise, escalating — passes through
+a gate here, and every gate returns a :class:`GateDecision` with a
+machine-checkable reason, so "every money action explainable, bounded and
+gated" is an architecture property, not a prompt instruction. Gates are pure
+functions of config and facts; they contain no model calls and no I/O.
 """
 
 from __future__ import annotations
 
 import enum
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
 
-from urudhi.ledger.models import Channel, Invoice, InvoiceState
+from urudhi.agent.intervention import (
+    CONTACTING,
+    DecisionContext,
+    InterventionKind,
+    InterventionRecommendation,
+)
+from urudhi.ledger.models import Channel, Installment, Invoice, InvoiceState
 from urudhi.ledger.money import Paise, format_inr
 
 BPS_DENOMINATOR = 10_000
@@ -32,13 +39,29 @@ class PolicyConfig(BaseModel):
     max_installments: int = Field(default=3, ge=1, le=12)
     min_installment: Paise = Field(default=100_000, ge=0)        # ₹1,000 floor per installment
     max_promise_horizon_days: int = Field(default=30, ge=1)
+    min_discount_days_overdue: int = Field(default=14, ge=0)     # no discounts on fresh debt
+    min_installment_balance: Paise = Field(default=500_000, ge=0)  # ₹5,000+ to split
 
+    timezone: str = "Asia/Kolkata"        # contact hours are judged in THIS zone
     contact_open: time = time(10, 0)      # RBI-style courtesy window
     contact_close: time = time(19, 0)
     max_attempts_per_invoice: int = Field(default=6, ge=1)
     max_attempts_per_day: int = Field(default=1, ge=1)
+    min_days_between_contacts: int = Field(default=2, ge=0)
     escalate_after_broken_promises: int = Field(default=2, ge=1)
+    # An LLM-proposed escalation is honored only once the debtor has this many
+    # broken promises — the model may not remove an invoice from automation on a whim.
+    recommended_escalation_min_broken: int = Field(default=1, ge=0)
     allowed_channels: frozenset[Channel] = frozenset({Channel.WHATSAPP, Channel.EMAIL})
+
+    def local(self, now: datetime) -> datetime:
+        """Convert an aware timestamp into the policy zone. Naive input is an error."""
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError(
+                "policy needs a timezone-aware datetime; a naive value would be judged "
+                "in whatever zone the caller happened to mean"
+            )
+        return now.astimezone(ZoneInfo(self.timezone))
 
 
 class GateDecision(BaseModel):
@@ -70,6 +93,25 @@ class Offer(BaseModel):
     installment_count: int = 1
     pay_by: date                           # last date the offer asks money to arrive
 
+    def settlement_amount(self, balance: Paise) -> Paise:
+        if self.type is OfferType.DISCOUNT:
+            return balance * (BPS_DENOMINATOR - self.discount_bps) // BPS_DENOMINATOR
+        return balance
+
+    def schedule(self, balance: Paise, today: date) -> list[Installment]:
+        """Equal installments, evenly spaced from tomorrow-ish to ``pay_by``."""
+        if self.type is not OfferType.INSTALLMENTS:
+            return []
+        n = self.installment_count
+        span = max(1, (self.pay_by - today).days)
+        per = balance // n
+        schedule = []
+        for i in range(1, n + 1):
+            due = today + timedelta(days=max(1, span * i // n))
+            amount = per if i < n else balance - per * (n - 1)
+            schedule.append(Installment(due_on=due, amount=amount))
+        return schedule
+
 
 class ContactFacts(BaseModel):
     """Everything the contact gate needs to know, gathered by the caller."""
@@ -79,6 +121,7 @@ class ContactFacts(BaseModel):
     attempts_total: int
     attempts_today: int
     broken_promises: int
+    days_since_last_contact: int | None = None
 
 
 def check_contact(invoice: Invoice, facts: ContactFacts, config: PolicyConfig) -> GateDecision:
@@ -88,14 +131,18 @@ def check_contact(invoice: Invoice, facts: ContactFacts, config: PolicyConfig) -
         return GateDecision.block(gate, "debtor asked us to stop; stop-contact is terminal")
     if invoice.state in (InvoiceState.DISPUTED, InvoiceState.ESCALATED):
         return GateDecision.block(gate, f"invoice is {invoice.state}; a human owns it now")
+    if invoice.state is InvoiceState.CLOSED:
+        return GateDecision.block(gate, "invoice was closed by a human; nothing to chase")
     if invoice.state is InvoiceState.PAID:
         return GateDecision.block(gate, "invoice is settled; there is nothing to chase")
     if facts.channel not in config.allowed_channels:
         return GateDecision.block(gate, f"channel {facts.channel} is not in the allowed set")
-    if not (config.contact_open <= facts.now.time() < config.contact_close):
+    local = config.local(facts.now)
+    if not (config.contact_open <= local.time() < config.contact_close):
         return GateDecision.block(
             gate,
-            f"outside contact hours {config.contact_open:%H:%M}–{config.contact_close:%H:%M}",
+            f"outside contact hours {config.contact_open:%H:%M}–{config.contact_close:%H:%M} "
+            f"{config.timezone} (local time {local:%H:%M})",
         )
     if facts.attempts_today >= config.max_attempts_per_day:
         return GateDecision.block(gate, "daily attempt limit reached for this debtor")
@@ -104,7 +151,16 @@ def check_contact(invoice: Invoice, facts: ContactFacts, config: PolicyConfig) -
             gate,
             f"attempt limit ({config.max_attempts_per_invoice}) exhausted; escalate instead",
         )
-    return GateDecision.allow(gate, "within contact hours and attempt limits")
+    if (
+        facts.days_since_last_contact is not None
+        and facts.days_since_last_contact < config.min_days_between_contacts
+    ):
+        return GateDecision.block(
+            gate,
+            f"contacted {facts.days_since_last_contact} day(s) ago; minimum spacing is "
+            f"{config.min_days_between_contacts} days",
+        )
+    return GateDecision.allow(gate, "within contact hours, spacing and attempt limits")
 
 
 def check_offer(invoice: Invoice, offer: Offer, today: date, config: PolicyConfig) -> GateDecision:
@@ -134,6 +190,11 @@ def check_offer(invoice: Invoice, offer: Offer, today: date, config: PolicyConfi
                 f"discount {offer.discount_bps}bps exceeds delegated cap "
                 f"of {config.max_discount_bps}bps",
             )
+        if invoice.days_overdue(today) < config.min_discount_days_overdue:
+            return GateDecision.block(
+                gate,
+                f"no discounts before {config.min_discount_days_overdue} days overdue",
+            )
     elif offer.discount_bps != 0:
         return GateDecision.block(gate, f"{offer.type} offers may not carry a discount")
 
@@ -153,6 +214,12 @@ def check_offer(invoice: Invoice, offer: Offer, today: date, config: PolicyConfi
                 f"installments of {format_inr(per_installment)} fall below the "
                 f"{format_inr(config.min_installment)} floor",
             )
+        if invoice.balance < config.min_installment_balance:
+            return GateDecision.block(
+                gate,
+                f"balance {format_inr(invoice.balance)} is below the "
+                f"{format_inr(config.min_installment_balance)} installment threshold",
+            )
     elif offer.installment_count != 1:
         return GateDecision.block(gate, f"{offer.type} offers must be single-payment")
 
@@ -171,3 +238,113 @@ def should_escalate(facts: ContactFacts, config: PolicyConfig) -> GateDecision:
     if facts.attempts_total >= config.max_attempts_per_invoice:
         return GateDecision.allow(gate, "contact attempts exhausted without recovery")
     return GateDecision.block(gate, "within thresholds; agent continues")
+
+
+# -- intervention decision --------------------------------------------------
+
+class Decision(BaseModel):
+    """Policy's final word on a brain's proposal.
+
+    ``modified`` is True when the final action differs from the proposal —
+    a blocked concession degrades to a plain reminder, never to a softer
+    concession; a proposal over a running promise degrades to waiting.
+    """
+
+    proposed: InterventionRecommendation
+    final: InterventionKind
+    offer: Offer | None = None
+    gates: list[GateDecision] = Field(default_factory=list)
+    modified: bool = False
+    reasons: list[str] = Field(default_factory=list)  # human-readable, structured
+
+
+def decide_intervention(
+    invoice: Invoice,
+    context: DecisionContext,
+    proposal: InterventionRecommendation,
+    facts: ContactFacts,
+    config: PolicyConfig,
+) -> Decision:
+    """Turn a proposal into an allowed action, modifying or blocking as policy requires."""
+    today = context.today
+    gates: list[GateDecision] = []
+    reasons: list[str] = []
+    final = proposal.action
+    offer: Offer | None = None
+
+    def degrade(to: InterventionKind, why: str) -> None:
+        nonlocal final
+        reasons.append(f"{final} → {to}: {why}")
+        final = to
+
+    # 1. A running commitment always wins: never chase over a live promise/plan.
+    running = context.open_promise_on is not None or (
+        context.live_concession is not None and context.live_concession.startswith("installments")
+    )
+    if running and final is not InterventionKind.ESCALATE_HUMAN:
+        if final is not InterventionKind.WAIT_FOR_PROMISE:
+            degrade(InterventionKind.WAIT_FOR_PROMISE, "a promise or plan is still running")
+        gates.append(GateDecision.allow("commitment", "waiting on the debtor's own word"))
+        return Decision(proposed=proposal, final=final, gates=gates,
+                        modified=final is not proposal.action, reasons=reasons)
+
+    # 2. Escalation is a policy privilege, not a model whim.
+    if final is InterventionKind.ESCALATE_HUMAN:
+        earned = should_escalate(facts, config)
+        if earned.allowed:
+            gates.append(earned)
+        elif facts.broken_promises >= config.recommended_escalation_min_broken and (
+            proposal.confidence >= 0.7
+        ):
+            gates.append(GateDecision.allow(
+                "escalation",
+                f"recommended with confidence {proposal.confidence:.2f} after "
+                f"{facts.broken_promises} broken promise(s)",
+            ))
+        else:
+            gates.append(GateDecision.block(
+                "escalation",
+                "proposal to escalate rejected: no broken promises and thresholds not met",
+            ))
+            degrade(InterventionKind.REMINDER, "escalation not earned under policy")
+
+    # 3. Anything that contacts the debtor needs the contact gate.
+    if final in CONTACTING:
+        contact = check_contact(invoice, facts, config)
+        gates.append(contact)
+        if not contact.allowed:
+            degrade(InterventionKind.NO_ACTION, contact.reason)
+            return Decision(proposed=proposal, final=final, gates=gates,
+                            modified=True, reasons=reasons)
+
+    # 4. Concessions must be priced inside delegated authority.
+    if final is InterventionKind.DISCOUNT_OFFER:
+        bps = proposal.proposed_discount_bps or 0
+        pay_by = proposal.proposed_pay_by or today + timedelta(days=7)
+        offer = Offer(type=OfferType.DISCOUNT, invoice_id=invoice.id,
+                      discount_bps=bps, pay_by=pay_by)
+        verdict = check_offer(invoice, offer, today, config)
+        gates.append(verdict)
+        if not verdict.allowed:
+            offer = None
+            degrade(InterventionKind.REMINDER, verdict.reason)
+    elif final is InterventionKind.INSTALLMENT_OFFER:
+        n = proposal.proposed_installments or 2
+        pay_by = proposal.proposed_pay_by or today + timedelta(days=min(28, config.max_promise_horizon_days))
+        offer = Offer(type=OfferType.INSTALLMENTS, invoice_id=invoice.id,
+                      installment_count=n, pay_by=pay_by)
+        verdict = check_offer(invoice, offer, today, config)
+        gates.append(verdict)
+        if not verdict.allowed:
+            offer = None
+            degrade(InterventionKind.REMINDER, verdict.reason)
+    elif final is InterventionKind.PAYMENT_LINK and not context.payment_links_available:
+        degrade(InterventionKind.REMINDER, "no payment rail configured for links")
+
+    if final in CONTACTING and not any(g.gate == "offer" for g in gates):
+        gates.append(GateDecision.allow("offer", "no concession proposed"))
+
+    return Decision(
+        proposed=proposal, final=final, offer=offer, gates=gates,
+        modified=final is not proposal.action, reasons=reasons,
+    )

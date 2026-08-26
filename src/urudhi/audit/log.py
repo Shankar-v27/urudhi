@@ -35,17 +35,26 @@ class Actor(enum.StrEnum):
 
 class EventKind(enum.StrEnum):
     MESSAGE_SENT = "message_sent"
+    MESSAGE_FAILED = "message_failed"
     MESSAGE_RECEIVED = "message_received"
     PROMISE_RECORDED = "promise_recorded"
     PROMISE_RESOLVED = "promise_resolved"
     PAYMENT_OBSERVED = "payment_observed"
+    PAYMENT_UNMATCHED = "payment_unmatched"   # signed, real, but no ledger invoice
+    PAYMENT_REJECTED = "payment_rejected"     # signed, but the ledger refused it
     GATE_ALLOWED = "gate_allowed"
     GATE_BLOCKED = "gate_blocked"
+    INTERVENTION_PROPOSED = "intervention_proposed"  # the brain's proposal, verbatim
+    INTERVENTION_DECIDED = "intervention_decided"    # policy's final word
     OFFER_MADE = "offer_made"
+    CONCESSION_ACCEPTED = "concession_accepted"
+    CONCESSION_RESOLVED = "concession_resolved"      # settled / expired / broken / withdrawn
     INVOICE_STATE_CHANGED = "invoice_state_changed"
     ESCALATED = "escalated"
     STOP_CONTACT_HONORED = "stop_contact_honored"
     DISPUTE_RECORDED = "dispute_recorded"
+    BRAIN_FAILED = "brain_failed"             # LLM unavailable / unusable; action deferred
+    HUMAN_ACTION = "human_action"
     RUN_STARTED = "run_started"
     RUN_FINISHED = "run_finished"
 

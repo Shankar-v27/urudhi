@@ -21,3 +21,8 @@ dashboard/dist/
 *.sqlite3
 *.db
 .DS_Store
+
+# Local outbox (sandbox emails)
+data/outbox/
+*.sqlite3-wal
+*.sqlite3-shm
