@@ -109,12 +109,14 @@ class TestHappyPath:
         assert len(outbox.sent) == 1 and "rzp.io" in outbox.sent[0][2]
 
         reply = agent.handle_reply("inv_1", "Sorry sir, will pay ₹2,500 in 3 days.", MORNING)
-        assert reply.action is Action.PROMISE_RECORDED
+        assert reply.action is Action.COMMITMENT_CREATED
         assert store.get_invoice("inv_1").state is InvoiceState.PROMISED
+        assert len(outbox.sent) == 2  # the confirmation with the commitment's own link
 
         ingest_payment_event(store, rzp_event(), now=datetime(2026, 8, 26, 15, 0, tzinfo=UTC))
         assert store.get_invoice("inv_1").state is InvoiceState.PAID
         assert store.promises_for("inv_1")[0].state is PromiseState.KEPT
+        assert store.commitments_for("inv_1")[0].state.value == "fulfilled"
 
         seen = kinds(store)
         for kind in (EventKind.GATE_ALLOWED, EventKind.INTERVENTION_PROPOSED,
@@ -129,7 +131,7 @@ class TestHappyPath:
         agent.handle_reply("inv_1", "will pay ₹2,500 in 5 days", MORNING)
         later = agent.chase("inv_1", MORNING + timedelta(days=3))
         assert later.action is Action.WAITED
-        assert len(outbox.sent) == 1
+        assert len(outbox.sent) == 2  # chase + commitment confirmation; nothing more
 
 
 class TestBrokenPromisesEscalate:
@@ -137,7 +139,7 @@ class TestBrokenPromisesEscalate:
         day = MORNING
         for _ in range(2):
             assert agent.chase("inv_1", day).action is Action.MESSAGE_SENT
-            assert agent.handle_reply("inv_1", "will pay ₹2,500 in 2 days", day).action is Action.PROMISE_RECORDED
+            assert agent.handle_reply("inv_1", "will pay ₹2,500 in 2 days", day).action is Action.COMMITMENT_CREATED
             day = day + timedelta(days=3)
             results = agent.daily_tick(day.date(), day)
             assert len(results) == 1
@@ -246,10 +248,14 @@ class TestNegotiation:
         assert result.intervention is InterventionKind.REMINDER
         assert store.get_invoice("inv_1").state is not InvoiceState.ESCALATED
 
-    def test_far_future_promise_is_countered_not_recorded(self, agent, store):
+    def test_far_future_promise_is_recorded_as_evidence_but_declined(self, agent, store):
         result = agent.handle_reply("inv_1", "will pay ₹2,500 in 60 days", MORNING)
-        assert result.action is Action.COUNTER_OFFERED
+        assert result.action is Action.PROMISE_RECORDED
+        assert not result.commitment_verdict.allowed and "horizon" in result.commitment_verdict.reason
         assert store.open_promise_for("inv_1") is None
+        assert store.promises_for("inv_1")[0].state is PromiseState.DECLINED
+        assert store.commitments_for("inv_1") == []
+        assert store.get_invoice("inv_1").state is InvoiceState.OUTSTANDING
 
 
 class TestContactDiscipline:

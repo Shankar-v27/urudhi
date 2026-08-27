@@ -120,6 +120,10 @@ class Stimulus:
     first_installment: int = 0     # paise
     installment_due_days: list[int] = field(default_factory=list)  # days from today
     asked_for_promise: bool = False
+    # The agent turns promises into commitments with an exact-amount payment
+    # link and a deadline confirmation (Urudhi arm). A debtor with a concrete
+    # instrument in hand keeps their word a little more often and pays sooner.
+    commitment_links: bool = False
 
 
 @dataclass
@@ -286,7 +290,7 @@ class Persona:
         pay_prob = max(0.0, min(0.98, pay_prob))
 
         if rng.random() < pay_prob:
-            kept = rng.random() < t.reliability
+            kept = rng.random() < t.reliability + (0.08 if stimulus.commitment_links else 0.0)
             if offered_plan:
                 text = self._say_accept(stimulus.first_installment,
                                         min(stimulus.installment_due_days or [3]), today)
@@ -321,8 +325,14 @@ class Persona:
             )
             amount = min(amount, self.remaining)
             days = rng.randint(1, 3) if stimulus.has_link else rng.randint(2, 6)
+            if stimulus.commitment_links and days > 1:
+                days -= 1  # a link for the exact amount removes a day of friction
             text = self._say_promise(amount, days, today, partial=not full)
             payments = [ScheduledPayment(amount, days)] if kept else []
+            # Some debtors honour a commitment only in part: money arrives, but
+            # short of what was agreed — a partially fulfilled commitment.
+            if kept and rng.random() < 0.18 * (1.0 - t.liquidity):
+                payments = [ScheduledPayment(max(PAISE_PER_RUPEE * 100, amount // 2), days)]
             if not kept:
                 self.broken_so_far += 1
             return Reaction(text=text, payments=payments, kept=kept)

@@ -11,6 +11,9 @@
     "max_promise_horizon_days": 30,
     "min_discount_days_overdue": 14,
     "min_installment_balance": 500000,
+    "allow_partial_commitments": true,
+    "min_commitment": 10000,
+    "commitment_reminder_days_before": 1,
     "timezone": "Asia/Kolkata",
     "contact_open": "10:00:00",
     "contact_close": "19:00:00",
@@ -45,6 +48,7 @@
       "disputes": 0,
       "stop_contacts": 0,
       "contact_attempts": 0,
+      "messages_total": 0,
       "replies_received": 0,
       "offers_made": 0,
       "offers_accepted": 0,
@@ -62,7 +66,36 @@
         "15-21": 0,
         "22+": 0
       },
-      "audit_events": 6
+      "audit_events": 6,
+      "recovered_per_contact_attempt_paise": null,
+      "recovered_per_message_paise": null,
+      "commitments": {
+        "created": 0,
+        "by_source": {
+          "promise": 0,
+          "concession": 0,
+          "installment": 0,
+          "human": 0
+        },
+        "accepted": 0,
+        "fulfilled": 0,
+        "fulfilled_on_time": 0,
+        "partially_fulfilled": 0,
+        "missed": 0,
+        "cancelled": 0,
+        "active_at_end": 0,
+        "fulfillment_rate": null,
+        "amount_committed_paise": 0,
+        "amount_fulfilled_paise": 0,
+        "commitment_to_payment_conversion": null,
+        "median_days_commitment_to_payment": null,
+        "average_delay_days": null,
+        "recovered_per_commitment_paise": null,
+        "recovered_per_contact_attempt_paise": null,
+        "instruments_issued": 0,
+        "exact_matched_payments": 0,
+        "exact_matched_paise": 0
+      }
     },
     "baseline": {
       "label": "Fixed-cadence baseline",
@@ -83,8 +116,9 @@
       "escalations": 0,
       "disputes": 0,
       "stop_contacts": 1,
-      "contact_attempts": 61,
-      "replies_received": 39,
+      "contact_attempts": 58,
+      "messages_total": 58,
+      "replies_received": 38,
       "offers_made": 0,
       "offers_accepted": 0,
       "offers_settled": 0,
@@ -93,15 +127,44 @@
       "proposals_modified": 0,
       "brain_deferrals": 0,
       "days_to_recovery_median": 2,
-      "days_to_recovery_mean": 3.55,
+      "days_to_recovery_mean": 2.64,
       "days_to_recovery_histogram": {
         "0-3": 8,
-        "4-7": 1,
-        "8-14": 2,
+        "4-7": 2,
+        "8-14": 1,
         "15-21": 0,
         "22+": 0
       },
-      "audit_events": 118
+      "audit_events": 114,
+      "recovered_per_contact_attempt_paise": 3449429,
+      "recovered_per_message_paise": 3449429,
+      "commitments": {
+        "created": 0,
+        "by_source": {
+          "promise": 0,
+          "concession": 0,
+          "installment": 0,
+          "human": 0
+        },
+        "accepted": 0,
+        "fulfilled": 0,
+        "fulfilled_on_time": 0,
+        "partially_fulfilled": 0,
+        "missed": 0,
+        "cancelled": 0,
+        "active_at_end": 0,
+        "fulfillment_rate": null,
+        "amount_committed_paise": 0,
+        "amount_fulfilled_paise": 0,
+        "commitment_to_payment_conversion": null,
+        "median_days_commitment_to_payment": null,
+        "average_delay_days": null,
+        "recovered_per_commitment_paise": null,
+        "recovered_per_contact_attempt_paise": 3449429,
+        "instruments_issued": 0,
+        "exact_matched_payments": 0,
+        "exact_matched_paise": 0
+      }
     },
     "urudhi": {
       "label": "Urudhi (claude brain)",
@@ -109,56 +172,100 @@
       "brain": "claude",
       "invoices": 20,
       "amount_at_risk_paise": 338340000,
-      "recovered_paise": 229405500,
-      "recovery_rate": 0.678,
-      "discount_cost_paise": 16000,
-      "net_recovered_paise": 229389500,
-      "invoices_paid": 9,
-      "promises_made": 19,
-      "promises_kept": 14,
-      "promises_broken": 2,
-      "promises_partially_kept": 0,
-      "promise_kept_rate": 0.875,
-      "escalations": 2,
+      "recovered_paise": 220903900,
+      "recovery_rate": 0.6529,
+      "discount_cost_paise": 38000,
+      "net_recovered_paise": 220865900,
+      "invoices_paid": 13,
+      "promises_made": 25,
+      "promises_kept": 19,
+      "promises_broken": 5,
+      "promises_partially_kept": 1,
+      "promise_kept_rate": 0.76,
+      "escalations": 4,
       "disputes": 1,
-      "stop_contacts": 2,
-      "contact_attempts": 45,
-      "replies_received": 31,
-      "offers_made": 4,
-      "offers_accepted": 2,
+      "stop_contacts": 1,
+      "contact_attempts": 54,
+      "messages_total": 82,
+      "replies_received": 34,
+      "offers_made": 3,
+      "offers_accepted": 1,
       "offers_settled": 1,
       "offers_expired": 1,
-      "gates_blocked": 29,
-      "proposals_modified": 7,
+      "gates_blocked": 47,
+      "proposals_modified": 6,
       "brain_deferrals": 0,
-      "days_to_recovery_median": 3,
-      "days_to_recovery_mean": 4.11,
+      "days_to_recovery_median": 2,
+      "days_to_recovery_mean": 3.69,
       "days_to_recovery_histogram": {
-        "0-3": 5,
-        "4-7": 3,
-        "8-14": 1,
+        "0-3": 8,
+        "4-7": 2,
+        "8-14": 3,
         "15-21": 0,
         "22+": 0
       },
-      "audit_events": 495
+      "audit_events": 640,
+      "recovered_per_contact_attempt_paise": 4090812,
+      "recovered_per_message_paise": 2693950,
+      "commitments": {
+        "created": 25,
+        "by_source": {
+          "promise": 24,
+          "concession": 1,
+          "installment": 0,
+          "human": 0
+        },
+        "accepted": 25,
+        "fulfilled": 19,
+        "fulfilled_on_time": 19,
+        "partially_fulfilled": 0,
+        "missed": 6,
+        "cancelled": 0,
+        "active_at_end": 0,
+        "fulfillment_rate": 0.76,
+        "amount_committed_paise": 285543700,
+        "amount_fulfilled_paise": 217313900,
+        "commitment_to_payment_conversion": 0.8,
+        "median_days_commitment_to_payment": 1,
+        "average_delay_days": 0.0,
+        "recovered_per_commitment_paise": 8836156,
+        "recovered_per_contact_attempt_paise": 4090812,
+        "instruments_issued": 25,
+        "exact_matched_payments": 20,
+        "exact_matched_paise": 217313900
+      }
     }
   },
   "uplift": {
-    "urudhi_vs_baseline_paise": 29338600,
-    "urudhi_vs_baseline_points": 8.67,
-    "urudhi_vs_no_action_paise": 186135500,
-    "urudhi_vs_no_action_points": 55.01,
-    "net_urudhi_vs_baseline_paise": 29322600
+    "urudhi_vs_baseline_paise": 20837000,
+    "urudhi_vs_baseline_points": 6.16,
+    "urudhi_vs_no_action_paise": 177633900,
+    "urudhi_vs_no_action_points": 52.5,
+    "net_urudhi_vs_baseline_paise": 20799000
   },
   "attribution": {
     "window_days": 7,
-    "rule": "A payment is attributed to the most recent message sent on the same invoice within the previous 7 days; otherwise it is unattributed (spontaneous, or outside the window). This is an accounting rule, not a causal claim.",
+    "rule": "Exact: a payment that arrived through a payment instrument issued for a specific commitment is attributed to that commitment and the intervention that created it. Window: otherwise, to the most recent message sent on the same invoice within the previous 7 days. Else unattributed (spontaneous, or outside the window). Window attribution is an accounting rule, not a causal claim; exact attribution is provenance (the instrument carried the commitment id), not proof of causation.",
     "arms": {
       "baseline": {
         "by_intervention": {
           "reminder": {
             "payments": 15,
             "paise": 200066900
+          }
+        },
+        "by_method": {
+          "exact": {
+            "payments": 0,
+            "paise": 0
+          },
+          "window": {
+            "payments": 15,
+            "paise": 200066900
+          },
+          "unattributed": {
+            "payments": 0,
+            "paise": 0
           }
         },
         "unattributed": {
@@ -168,30 +275,44 @@
       },
       "urudhi": {
         "by_intervention": {
-          "installment_offer": {
-            "payments": 1,
-            "paise": 383200
+          "payment_link": {
+            "payments": 12,
+            "paise": 189436000
           },
           "reminder": {
-            "payments": 9,
-            "paise": 129956200
-          },
-          "discount_offer": {
-            "payments": 1,
-            "paise": 384000
+            "payments": 2,
+            "paise": 896800
           },
           "request_promise": {
-            "payments": 2,
-            "paise": 73435400
+            "payments": 4,
+            "paise": 26209100
           },
-          "payment_link": {
+          "discount_offer": {
             "payments": 2,
-            "paise": 24876700
+            "paise": 772000
+          },
+          "commitment_confirmation": {
+            "payments": 1,
+            "paise": 3590000
+          }
+        },
+        "by_method": {
+          "exact": {
+            "payments": 20,
+            "paise": 217313900
+          },
+          "window": {
+            "payments": 1,
+            "paise": 3590000
+          },
+          "unattributed": {
+            "payments": 0,
+            "paise": 0
           }
         },
         "unattributed": {
-          "payments": 1,
-          "paise": 370000
+          "payments": 0,
+          "paise": 0
         }
       }
     }
@@ -236,13 +357,13 @@
       57546900,
       68926000,
       189436000,
-      189436000,
-      198749400,
-      198749400,
-      198749400,
-      198749400,
-      198749400,
       199476200,
+      199476200,
+      199476200,
+      199476200,
+      200066900,
+      200066900,
+      200066900,
       200066900,
       200066900,
       200066900,
@@ -250,20 +371,20 @@
     ],
     "urudhi": [
       0,
-      310000,
-      56289800,
-      139916700,
-      140456000,
-      140796000,
-      140796000,
-      189376000,
-      214231400,
-      229021500,
-      229405500,
-      229405500,
-      229405500,
-      229405500,
-      229405500
+      68926000,
+      189436000,
+      205640400,
+      215123800,
+      215123800,
+      215815100,
+      215815100,
+      215865100,
+      217313900,
+      220903900,
+      220903900,
+      220903900,
+      220903900,
+      220903900
     ]
   },
   "days_to_recovery": {
@@ -280,22 +401,22 @@
     },
     "baseline": {
       "median": 2,
-      "mean": 3.55,
+      "mean": 2.64,
       "histogram": {
         "0-3": 8,
-        "4-7": 1,
-        "8-14": 2,
+        "4-7": 2,
+        "8-14": 1,
         "15-21": 0,
         "22+": 0
       }
     },
     "urudhi": {
-      "median": 3,
-      "mean": 4.11,
+      "median": 2,
+      "mean": 3.69,
       "histogram": {
-        "0-3": 5,
-        "4-7": 3,
-        "8-14": 1,
+        "0-3": 8,
+        "4-7": 2,
+        "8-14": 3,
         "15-21": 0,
         "22+": 0
       }
@@ -307,7 +428,8 @@
     "Debtor behaviour reacts to the intervention received (link, discount, installment plan, request for a promise, contact fatigue); the trait ranges are stated in code and can be disputed.",
     "The three arms start from byte-identical portfolios and debtor traits; differences between arms are differences in strategy under this model, not causal evidence about real debtors.",
     "Recovered = sum of webhook-observed payments only. Discount cost = amounts waived under settled concessions. Net = recovered − waived.",
-    "A payment is attributed to the most recent message sent on the same invoice within the previous 7 days; otherwise it is unattributed (spontaneous, or outside the window). This is an accounting rule, not a causal claim.",
+    "A commitment is what policy accepted from a promise: exact amount, exact deadline, a payment link tagged with the commitment id. Creating one moves no money; it is fulfilled only by rail events matched to it and missed only by the calendar.",
+    "Exact: a payment that arrived through a payment instrument issued for a specific commitment is attributed to that commitment and the intervention that created it. Window: otherwise, to the most recent message sent on the same invoice within the previous 7 days. Else unattributed (spontaneous, or outside the window). Window attribution is an accounting rule, not a causal claim; exact attribution is provenance (the instrument carried the commitment id), not proof of causation.",
     "Sensitivity runs use the deterministic mock brain so the policy effect is isolated from LLM variance.",
     "With --brain claude the Urudhi arm is not byte-reproducible: model outputs vary."
   ]

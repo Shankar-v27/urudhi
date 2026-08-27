@@ -29,7 +29,14 @@ from pathlib import Path
 from typing import Any
 
 from urudhi.audit.log import GENESIS_HASH, Actor, AuditEvent, EventKind, make_event
-from urudhi.ledger.models import Concession, Debtor, Invoice, Payment, PromiseToPay
+from urudhi.ledger.models import (
+    Concession,
+    Debtor,
+    Invoice,
+    Payment,
+    PaymentCommitment,
+    PromiseToPay,
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS debtors (
@@ -54,6 +61,15 @@ CREATE TABLE IF NOT EXISTS concessions (
     id         TEXT PRIMARY KEY,
     invoice_id TEXT NOT NULL REFERENCES invoices(id),
     state      TEXT NOT NULL,
+    data       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS commitments (
+    id         TEXT PRIMARY KEY,
+    invoice_id TEXT NOT NULL REFERENCES invoices(id),
+    debtor_id  TEXT NOT NULL,
+    state      TEXT NOT NULL,
+    due_on     TEXT NOT NULL,
     data       TEXT NOT NULL
 );
 
@@ -106,6 +122,8 @@ CREATE INDEX IF NOT EXISTS idx_invoices_state     ON invoices(state);
 CREATE INDEX IF NOT EXISTS idx_promises_invoice   ON promises(invoice_id, state);
 CREATE INDEX IF NOT EXISTS idx_concessions_invoice ON concessions(invoice_id, state);
 CREATE INDEX IF NOT EXISTS idx_payments_invoice   ON payments(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_commitments_invoice ON commitments(invoice_id, state, due_on);
+CREATE INDEX IF NOT EXISTS idx_commitments_debtor  ON commitments(debtor_id, state);
 CREATE INDEX IF NOT EXISTS idx_outbound_invoice   ON outbound_messages(invoice_id, day);
 CREATE INDEX IF NOT EXISTS idx_audit_invoice      ON audit_events(invoice_id, seq);
 """
@@ -268,6 +286,44 @@ class Store:
         rows = self._rows("SELECT data FROM concessions ORDER BY id")
         return [Concession.model_validate_json(r[0]) for r in rows]
 
+    # -- commitments -------------------------------------------------------
+
+    def put_commitment(self, commitment: PaymentCommitment) -> None:
+        self._run(
+            "INSERT INTO commitments (id, invoice_id, debtor_id, state, due_on, data) "
+            "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+            "state = excluded.state, due_on = excluded.due_on, data = excluded.data",
+            (commitment.id, commitment.invoice_id, commitment.debtor_id,
+             commitment.state.value, commitment.due_on.isoformat(),
+             commitment.model_dump_json()),
+        )
+
+    def get_commitment(self, commitment_id: str) -> PaymentCommitment:
+        return PaymentCommitment.model_validate_json(self._get("commitments", commitment_id))
+
+    def commitments_for(self, invoice_id: str) -> list[PaymentCommitment]:
+        rows = self._rows(
+            "SELECT data FROM commitments WHERE invoice_id = ? ORDER BY due_on, id", (invoice_id,)
+        )
+        return [PaymentCommitment.model_validate_json(r[0]) for r in rows]
+
+    def live_commitments_for(self, invoice_id: str) -> list[PaymentCommitment]:
+        rows = self._rows(
+            "SELECT data FROM commitments WHERE invoice_id = ? "
+            "AND state IN ('active', 'partially_fulfilled') ORDER BY due_on, id", (invoice_id,)
+        )
+        return [PaymentCommitment.model_validate_json(r[0]) for r in rows]
+
+    def commitments_for_debtor(self, debtor_id: str) -> list[PaymentCommitment]:
+        rows = self._rows(
+            "SELECT data FROM commitments WHERE debtor_id = ? ORDER BY due_on, id", (debtor_id,)
+        )
+        return [PaymentCommitment.model_validate_json(r[0]) for r in rows]
+
+    def all_commitments(self) -> list[PaymentCommitment]:
+        rows = self._rows("SELECT data FROM commitments ORDER BY due_on, id")
+        return [PaymentCommitment.model_validate_json(r[0]) for r in rows]
+
     # -- payments ----------------------------------------------------------
 
     def record_payment_row(self, payment: Payment) -> bool:
@@ -359,9 +415,13 @@ class Store:
         rows = self.outbound_for(invoice_id)
         if since is not None:
             rows = [r for r in rows if r["at"] >= since]
-        total = len(rows)
-        today = sum(1 for r in rows if r["day"] == day)
-        last = max((r["at"] for r in rows), default=None)
+        # Answering the debtor's own message (a question, or confirming what
+        # they just agreed) is not a nudge: it neither burns the lifetime cap
+        # nor the day's allowance, and it does not reset contact spacing.
+        nudges = [r for r in rows if not r.get("responding")]
+        total = len(nudges)
+        today = sum(1 for r in nudges if r["day"] == day)
+        last = max((r["at"] for r in nudges), default=None)
         return total, today, last
 
     # -- audit chain -------------------------------------------------------

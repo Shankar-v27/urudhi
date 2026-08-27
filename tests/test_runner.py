@@ -75,7 +75,8 @@ class TestRecovery:
     def test_nobody_is_hammered_beyond_the_attempt_cap(self, urudhi):
         for invoice in urudhi.store.all_invoices():
             sent = urudhi.store.events_for(invoice.id, EventKind.MESSAGE_SENT)
-            assert len(sent) <= urudhi.policy.max_attempts_per_invoice + 2  # + answered replies
+            nudges = [e for e in sent if not e.payload.get("responding")]  # answers aren't nudges
+        assert len(nudges) <= urudhi.policy.max_attempts_per_invoice
 
     def test_offers_were_made_and_some_settled(self, report):
         m = report["metrics"]

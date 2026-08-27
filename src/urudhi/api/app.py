@@ -26,12 +26,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from urudhi import __version__
-from urudhi.agent.explain import explain_invoice
+from urudhi.agent.explain import commitment_integrity, explain_invoice
 from urudhi.agent.human import HumanRequest, apply_human_action, escalation_queue
 from urudhi.agent.loop import RecoveryAgent, chaseable
 from urudhi.agent.policy import PolicyConfig
 from urudhi.audit.log import ChainError, EventKind, verify_chain
-from urudhi.ledger.models import Debtor, InvoiceState
+from urudhi.ledger.commitments import profile_for
+from urudhi.ledger.models import CommitmentState, Debtor, InvoiceState
 from urudhi.ledger.transitions import InvalidTransition
 from urudhi.observability import counters, get_logger, new_request_id
 from urudhi.rails.webhooks import (
@@ -177,13 +178,24 @@ def create_app(
             event = json.loads(body)
         except ValueError as error:
             raise HTTPException(status_code=400, detail="body is not JSON") from error
+        # Razorpay carries the delivery's idempotency key in a header, not in
+        # the body (the body has no top-level "id"). Adopt it when absent.
+        header_id = request.headers.get("x-razorpay-event-id", "").strip()
+        if isinstance(event, dict) and not event.get("id") and header_id:
+            event["id"] = header_id
         try:
             result = ingest_payment_event(store, event, now=_now())
         except WebhookError as error:
             # Signed but not a payment event we handle: acknowledge so Razorpay
-            # stops retrying; nothing to reconcile.
+            # stops retrying; nothing to reconcile — but say why, so a
+            # misconfigured subscription is diagnosable from the log.
             counters.inc("webhook.ignored")
+            log.warning("webhook.ignored", event=(event.get("event") if isinstance(event, dict) else None),
+                        event_id=header_id or None, reason=str(error))
             return {"status": IngestStatus.IGNORED.value, "reason": str(error)}
+        log.info("webhook.result", status=result.status.value, event=event.get("event"),
+                 event_id=result.event_id, reason=result.reason or None,
+                 payment_id=result.payment.id if result.payment else None)
         return {
             "status": result.status.value, "reason": result.reason,
             "payment_id": result.payment.id if result.payment else None,
@@ -266,6 +278,7 @@ def create_app(
             "invoice": invoice.model_dump(mode="json") | {"balance": invoice.balance},
             "debtor": public_debtor(store.get_debtor(invoice.debtor_id)),
             "promises": [p.model_dump(mode="json") for p in store.promises_for(invoice_id)],
+            "commitments": [c.model_dump(mode="json") for c in store.commitments_for(invoice_id)],
             "concessions": [c.model_dump(mode="json") for c in store.concessions_for(invoice_id)],
             "payments": [p.model_dump(mode="json") for p in store.payments_for(invoice_id)],
             "events": [e.model_dump(mode="json") for e in store.events_for(invoice_id)],
@@ -283,7 +296,7 @@ def create_app(
     def human_action(invoice_id: str, body: HumanRequest,
                      _: str = Depends(require_token)) -> dict[str, Any]:
         try:
-            return apply_human_action(store, invoice_id, body, datetime.now(UTC))
+            return apply_human_action(store, invoice_id, body, _now(), agent=agent)
         except KeyError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except InvalidTransition as error:
@@ -296,6 +309,37 @@ def create_app(
     @app.get("/api/promises")
     def promises(_: str = Depends(require_token)) -> list[dict[str, Any]]:
         return [p.model_dump(mode="json") for p in store.all_promises()]
+
+    @app.get("/api/commitments")
+    def commitments(_: str = Depends(require_token)) -> list[dict[str, Any]]:
+        numbers = {i.id: i.number for i in store.all_invoices()}
+        return [
+            c.model_dump(mode="json") | {"amount_remaining": c.amount_remaining,
+                                         "invoice_number": numbers.get(c.invoice_id)}
+            for c in store.all_commitments()
+        ]
+
+    @app.get("/api/invoices/{invoice_id}/commitments")
+    def invoice_commitments(invoice_id: str, _: str = Depends(require_token)) -> dict[str, Any]:
+        """The provenance chain — said → understood → allowed → instrument → rail → outcome."""
+        try:
+            invoice = store.get_invoice(invoice_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        events = store.events_for(invoice_id)
+        return {
+            "invoice_id": invoice_id,
+            "credibility": profile_for(store.commitments_for_debtor(invoice.debtor_id),
+                                       invoice.human_released_at).model_dump(),
+            "commitments": [commitment_integrity(store, c, events)
+                            for c in store.commitments_for(invoice_id)],
+            "blocked": [
+                {"at": e.at.isoformat(), "amount": e.payload.get("amount"),
+                 "due_on": e.payload.get("due_on"), "reason": e.payload.get("reason"),
+                 "checks": e.payload.get("checks", [])}
+                for e in events if e.kind is EventKind.COMMITMENT_BLOCKED
+            ],
+        }
 
     @app.get("/api/concessions")
     def concessions(_: str = Depends(require_token)) -> list[dict[str, Any]]:
@@ -326,15 +370,38 @@ def create_app(
         by_intervention: dict[str, int] = defaultdict(int)
         for e in sent:
             by_intervention[str(e.payload.get("intervention", "reminder"))] += 1
+        commitments = store.all_commitments()
+        profile = profile_for(commitments)
+        recovered = sum(i.amount_paid for i in invoices)
+        counted = [c for c in commitments if c.state is not CommitmentState.SUPERSEDED]
+        with_money = sum(1 for c in counted if c.amount_received > 0)
+        payments = store.all_payments()
+        exact = sum(p.amount for p in payments if (p.matched_by or "").startswith("instrument"))
+        nudges = [e for e in sent if not e.payload.get("responding")]
         return {
             "invoices": len(invoices),
             "outstanding_paise": sum(i.amount for i in invoices),
-            "recovered_paise": sum(i.amount_paid for i in invoices),
+            "recovered_paise": recovered,
             "waived_paise": sum(i.amount_waived for i in invoices),
             "by_state": by_state,
             "messages_sent": len(sent),
             "by_intervention": dict(by_intervention),
             "brain": brain_name, "transport": transport_mode,
+            "commitments": {
+                "created": len(counted), "active": profile.active,
+                "fulfilled": profile.fulfilled, "fulfilled_on_time": profile.fulfilled_on_time,
+                "partially_fulfilled": profile.partially_fulfilled,
+                "missed": profile.missed, "cancelled": profile.cancelled,
+                "fulfillment_rate": profile.fulfillment_rate,
+                "amount_committed_paise": profile.amount_committed,
+                "amount_received_paise": profile.amount_received,
+                "conversion": round(with_money / len(counted), 4) if counted else None,
+                "average_delay_days": profile.average_delay_days,
+                "recovered_per_commitment_paise": (recovered // len(counted)) if counted else None,
+                "recovered_per_attempt_paise": (recovered // len(nudges)) if nudges else None,
+                "messages_total": len(sent), "nudges": len(nudges),
+                "exact_instrument_matched_paise": exact,
+            },
         }
 
     @app.get("/api/timeline")

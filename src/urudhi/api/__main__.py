@@ -23,6 +23,7 @@ from urudhi.agent.brain import BRAIN_MODES, BrainConfigError, make_brain
 from urudhi.agent.loop import RecoveryAgent
 from urudhi.agent.policy import PolicyConfig
 from urudhi.api.app import create_app
+from urudhi.config import format_presence_report
 from urudhi.observability import configure_logging, get_logger
 from urudhi.rails.razorpay_client import FakeRails, RazorpayRails
 from urudhi.store import Store
@@ -42,6 +43,8 @@ def main() -> None:
 
     load_dotenv(Path.cwd() / ".env")
     configure_logging(args.log_level)
+    for line in format_presence_report().splitlines():
+        log.info("config " + line)
 
     try:
         brain = make_brain(args.brain)

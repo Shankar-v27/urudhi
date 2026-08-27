@@ -106,7 +106,12 @@ table.compact th, table.compact td { padding: 6px 10px; font-size: 12.5px; }
 .state.outstanding, .state.partially_paid, .state.superseded, .state.partially_kept, .state.expired { background: rgba(154, 103, 0, 0.12); color: var(--amber); }
 .state.promised, .state.open, .state.offered { background: rgba(9, 105, 218, 0.12); color: var(--blue); }
 .state.escalated, .state.disputed, .state.broken { background: rgba(207, 34, 46, 0.12); color: var(--red); }
-.state.stop_contact, .state.closed, .state.withdrawn { background: rgba(101, 109, 118, 0.14); color: var(--muted); }
+.state.stop_contact, .state.closed, .state.withdrawn, .state.cancelled { background: rgba(101, 109, 118, 0.14); color: var(--muted); }
+/* commitment lifecycle */
+.state.active { background: rgba(9, 105, 218, 0.12); color: var(--blue); }
+.state.fulfilled { background: rgba(26, 127, 55, 0.12); color: var(--green); }
+.state.partially_fulfilled { background: rgba(154, 103, 0, 0.12); color: var(--amber); }
+.state.missed { background: rgba(207, 34, 46, 0.12); color: var(--red); }
 
 /* tabs */
 .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
@@ -149,6 +154,9 @@ table.compact th, table.compact td { padding: 6px 10px; font-size: 12.5px; }
 .timeline .kind.gate_blocked, .timeline .kind.escalated, .timeline .kind.dispute_recorded, .timeline .kind.brain_failed { color: var(--red); }
 .timeline .kind.payment_observed, .timeline .kind.promise_kept { color: var(--green); }
 .timeline .kind.human_action { color: var(--amber); }
+.timeline .kind.commitment_created, .timeline .kind.commitment_fulfilled, .timeline .kind.payment_instrument_created, .timeline .kind.commitment_approved { color: var(--green); }
+.timeline .kind.commitment_blocked, .timeline .kind.commitment_missed, .timeline .kind.commitment_cancelled { color: var(--red); }
+.timeline .kind.commitment_partially_fulfilled, .timeline .kind.commitment_superseded { color: var(--amber); }
 .timeline .when { color: var(--muted); font-size: 11px; margin-left: 8px; }
 .verbatim { border-left: 3px solid var(--blue); padding-left: 10px; color: var(--muted); font-style: italic; margin: 4px 0; }
 
@@ -159,6 +167,45 @@ table.queue tr.expand:has(td:empty) { display: none; }
 .buttons { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .history { list-style: none; padding: 0; margin: 0; }
 .history li { padding: 2px 0; }
+
+/* commitment integrity: a vertical stepper, one card per commitment */
+.commit { border: 1px solid var(--border); border-radius: 8px; background: var(--bg); padding: 10px 14px 6px; margin: 10px 0; }
+.commit-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: 13px; font-variant-numeric: tabular-nums; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.commit-head .muted { margin-right: 4px; }
+.provenance { list-style: none; padding: 0; margin: 4px 0 0; }
+.provenance .step { position: relative; padding: 8px 0 10px 28px; border-left: 2px solid var(--border); margin-left: 9px; }
+.provenance .step:last-child { border-left-color: transparent; }
+.step-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 4px; }
+.step-n { position: absolute; left: -10px; top: 8px; width: 18px; height: 18px; border-radius: 999px; background: var(--panel); border: 1px solid var(--border); color: var(--muted); font-size: 10px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; }
+.step-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.ref { font-size: 11px; color: var(--blue); font-variant-numeric: tabular-nums; border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; background: var(--panel); }
+.ref.muted { color: var(--muted); }
+.evidence { font-size: 13px; }
+.evidence .verbatim { margin: 2px 0 6px; }
+.evidence .payments { margin: 2px 0; }
+.evidence .payments li:last-child { border-bottom: none; }
+.kv { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.kv .muted { margin-right: 4px; }
+.kv .small { font-size: 12px; }
+.decision-line { margin: 4px 0 0; display: flex; align-items: baseline; gap: 6px; }
+.decision-line .mark { font-weight: 700; }
+.mark.ok { color: var(--green); }
+.mark.blocked { color: var(--red); }
+.blocked-list { list-style: none; padding: 0; margin: 6px 0; }
+.blocked-list li { border: 1px solid rgba(207, 34, 46, 0.4); border-radius: 8px; padding: 8px 12px; margin: 8px 0; background: var(--bg); font-size: 13px; }
+.blocked-list .gates { margin: 4px 0 2px; }
+
+/* credibility strip inside "why this action" */
+.cred { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); padding: 8px 12px; margin: 4px 0 8px; }
+.cred-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; font-size: 13px; }
+.cred-head .value { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.cred .reasons { margin: 6px 0 0; font-size: 12.5px; }
+
+/* escalation commitment context and the arrange form */
+.commit-context { display: grid; gap: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); padding: 8px 12px; }
+.commit-context .verbatim { margin: 2px 0 0; }
+.arrange { display: grid; gap: 6px; border-top: 1px dashed var(--border); padding-top: 8px; }
+.arrange label { display: inline-flex; align-items: center; gap: 4px; }
 
 /* charts */
 .chart { margin: 8px 0 4px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }

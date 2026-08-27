@@ -97,6 +97,8 @@ def _rank_ids(store: Store, policy: PolicyConfig, today: date) -> list[str]:
     for invoice in chaseable(store):
         if store.open_promise_for(invoice.id) is not None:
             continue  # a promise is running; chasing over it burns goodwill
+        if store.live_commitments_for(invoice.id):
+            continue  # an executable commitment is running; let it run
         live = store.live_concession_for(invoice.id)
         if live is not None and live.type is ConcessionType.INSTALLMENTS:
             continue
@@ -105,6 +107,7 @@ def _rank_ids(store: Store, policy: PolicyConfig, today: date) -> list[str]:
         scores.append(score_invoice(
             invoice, store.promises_for(invoice.id), attempts,
             policy.max_attempts_per_invoice, today,
+            commitments=store.commitments_for_debtor(invoice.debtor_id),
         ))
     return [s.invoice_id for s in rank(scores)]
 
@@ -115,7 +118,8 @@ def _stimulus_from(store: Store, invoice_id: str, kind: InterventionKind,
     last = sent[-1].payload if sent else {}
     stimulus = Stimulus(kind=kind, contact_number=contact_number,
                         has_link=bool(last.get("payment_url")),
-                        asked_for_promise=kind is InterventionKind.REQUEST_PROMISE)
+                        asked_for_promise=kind is InterventionKind.REQUEST_PROMISE,
+                        commitment_links=True)  # the Urudhi arm executes promises as commitments
     concession = store.live_concession_for(invoice_id)
     if concession is not None and concession.id == last.get("concession_id"):
         if concession.type is ConcessionType.DISCOUNT:
@@ -153,13 +157,22 @@ class _World:
     def deliver_due(self, today: date) -> None:
         for payment in [p for p in self.pending if p.on <= today]:
             self.event_seq += 1
+            # A debtor holding a commitment's payment link pays through it, so
+            # the rail event carries the commitment id (exact attribution);
+            # otherwise the money arrives tagged with the invoice only.
+            live = self.store.live_commitments_for(payment.invoice_id)
+            notes = {"invoice_id": payment.invoice_id}
+            event = "payment.captured"
+            if live and live[0].instrument_id:
+                notes["commitment_id"] = live[0].id
+                event = "payment_link.paid"
             ingest_payment_event(self.store, {
                 "id": f"evt_sim_{self.event_seq:05d}",
-                "event": "payment.captured",
+                "event": event,
                 "payload": {"payment": {"entity": {
                     "id": f"pay_sim_{self.event_seq:05d}",
                     "amount": payment.amount, "currency": "INR", "method": "upi",
-                    "notes": {"invoice_id": payment.invoice_id},
+                    "notes": notes,
                 }}},
             }, now=self.at(today, time(9, 0)))
             self.personas[payment.invoice_id].note_payment(payment.amount)

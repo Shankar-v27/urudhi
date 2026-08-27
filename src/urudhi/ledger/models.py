@@ -53,6 +53,7 @@ class PromiseState(enum.StrEnum):
     BROKEN = "broken"            # promised date passed, no matching payment
     SUPERSEDED = "superseded"    # replaced by a newer promise on the invoice
     WITHDRAWN = "withdrawn"      # debtor retracted before the promised date
+    DECLINED = "declined"        # recorded as said, but policy refused it as a commitment
 
 
 class ConcessionType(enum.StrEnum):
@@ -175,3 +176,79 @@ class Payment(BaseModel):
     razorpay_payment_id: str
     razorpay_event_id: str            # webhook event that evidenced this payment
     observed_at: datetime
+    commitment_id: str | None = None  # the commitment this money was applied to, if any
+    matched_by: str | None = None     # "instrument" (link/VA carried the commitment id) or "invoice"
+
+
+class CommitmentSource(enum.StrEnum):
+    PROMISE = "promise"            # the debtor's own words, interpreted and policy-approved
+    CONCESSION = "concession"      # acceptance of a policy-approved discount settlement
+    INSTALLMENT = "installment"    # one dated installment of an accepted plan
+    HUMAN = "human"                # an arrangement a person approved after escalation
+
+
+class CommitmentState(enum.StrEnum):
+    ACTIVE = "active"                          # approved, instrument issued, deadline ahead
+    PARTIALLY_FULFILLED = "partially_fulfilled"  # some rail money before the deadline
+    FULFILLED = "fulfilled"                    # committed amount observed on the rails
+    MISSED = "missed"                          # deadline passed without the committed amount
+    CANCELLED = "cancelled"                    # stop-contact / dispute / escalation / human
+    SUPERSEDED = "superseded"                  # replaced by a newer commitment on the invoice
+
+
+class InstrumentType(enum.StrEnum):
+    PAYMENT_LINK = "payment_link"
+    VIRTUAL_ACCOUNT = "virtual_account"
+
+
+class PaymentCommitment(BaseModel):
+    """What Urudhi *accepted* as a bounded, executable recovery arrangement.
+
+    Three things stay apart on purpose:
+
+    * a :class:`PromiseToPay` is what the debtor **said** (verbatim, scored);
+    * a ``PaymentCommitment`` is what deterministic policy **accepted** from
+      it — an exact amount, an exact deadline, and the rail-side instrument
+      (a Razorpay Payment Link tagged with this id) the debtor can pay through;
+    * a :class:`Payment` is what the rails **verified**.
+
+    A commitment never moves money. It is fulfilled only by ``Payment`` rows
+    matched to it by the webhook path; it is missed by the calendar.
+    """
+
+    id: str
+    invoice_id: str
+    debtor_id: str
+    promise_id: str | None = None        # the promise it was accepted from, if any
+    concession_id: str | None = None     # the concession it executes, if any
+    installment_index: int | None = None  # 1-based position in an installment plan
+    source: CommitmentSource
+    committed_amount: Paise
+    currency: str = "INR"
+    due_on: date                          # last calendar day to pay (policy timezone)
+    due_at: datetime                      # end of that day, timezone-aware
+    state: CommitmentState = CommitmentState.ACTIVE
+    instrument_type: InstrumentType | None = None
+    instrument_id: str | None = None
+    payment_url: str | None = None
+    instrument_sent: bool = False         # the debtor has been told about the instrument
+    reminder_sent: bool = False
+    created_at: datetime
+    accepted_at: datetime | None = None   # when the debtor's acceptance was interpreted
+    fulfilled_at: datetime | None = None
+    missed_at: datetime | None = None
+    resolved_at: datetime | None = None
+    amount_received: Paise = 0            # rail money applied to this commitment
+    days_late: int = 0                    # >0 when fulfilled after the deadline
+    confidence: float = Field(ge=0.0, le=1.0, default=0.0)
+    evidence: str = ""                    # the debtor's verbatim words
+    rationale: str = ""                   # policy's one-line reason for accepting
+    cancel_reason: str = ""
+
+    @property
+    def amount_remaining(self) -> Paise:
+        return max(0, self.committed_amount - self.amount_received)
+
+    @property
+    def live(self) -> bool:
+        return self.state in (CommitmentState.ACTIVE, CommitmentState.PARTIALLY_FULFILLED)

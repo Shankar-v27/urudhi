@@ -28,8 +28,13 @@ from typing import Any
 from pydantic import BaseModel
 
 from urudhi.audit.log import Actor, EventKind
-from urudhi.ledger.models import Payment
-from urudhi.ledger.transitions import InvalidTransition, record_payment
+from urudhi.ledger.models import CommitmentState, Payment, PaymentCommitment
+from urudhi.ledger.transitions import (
+    InvalidTransition,
+    apply_payment_to_commitments,
+    note_late_payment,
+    record_payment,
+)
 from urudhi.observability import counters, get_logger
 from urudhi.rails.razorpay_client import payment_amount
 from urudhi.store import Store
@@ -110,6 +115,78 @@ def resolve_invoice_id(store: Store, event: dict[str, Any], entity: dict[str, An
     return None
 
 
+def resolve_commitment_id(event: dict[str, Any], entity: dict[str, Any]) -> str | None:
+    """The commitment a payment instrument was issued for, if the rails carried it."""
+    notes = entity.get("notes") or {}
+    if isinstance(notes, dict) and notes.get("commitment_id"):
+        return str(notes["commitment_id"])
+    link = ((event.get("payload", {}) or {}).get("payment_link", {}) or {}).get("entity", {}) or {}
+    link_notes = link.get("notes") or {}
+    if isinstance(link_notes, dict) and link_notes.get("commitment_id"):
+        return str(link_notes["commitment_id"])
+    reference = str(link.get("reference_id") or "")
+    if reference.startswith("cmt_"):
+        return reference
+    return None
+
+
+def _match_commitments(
+    store: Store, invoice_id: str, amount: int, now: datetime, instrument_cid: str | None,
+) -> tuple[list[PaymentCommitment], str | None, str | None, list[dict[str, Any]]]:
+    """Decide which commitment(s) this money fulfils.
+
+    Hierarchy: an instrument tagged with a commitment id is an *exact* match;
+    otherwise the invoice's live commitments are paid earliest-deadline first
+    (an *invoice* match). Returns (touched, primary_commitment_id, matched_by,
+    audit_rows).
+    """
+    live = store.live_commitments_for(invoice_id)
+    audit: list[dict[str, Any]] = []
+    matched_by: str | None = None
+    primary: str | None = None
+    touched: list[PaymentCommitment] = []
+    remaining = amount
+
+    if instrument_cid is not None:
+        try:
+            target = store.get_commitment(instrument_cid)
+        except KeyError:
+            target = None
+        if target is not None and target.invoice_id == invoice_id:
+            primary = target.id
+            if target.live:
+                matched_by = "instrument"
+                first, remaining = apply_payment_to_commitments([target], amount, now)
+                touched.extend(first)
+                live = [c for c in live if c.id != target.id]
+            elif target.state is CommitmentState.MISSED:
+                matched_by = "instrument-late"
+                late = note_late_payment(target, amount)
+                touched.append(late)
+                audit.append({"commitment_id": target.id, "applied": amount, "late": True,
+                              "state": late.state, "matched_by": matched_by})
+                remaining = 0
+            else:
+                matched_by = "instrument-stale"
+                audit.append({"commitment_id": target.id, "applied": 0,
+                              "state": target.state, "matched_by": matched_by,
+                              "reason": f"instrument belongs to a {target.state} commitment"})
+    if remaining > 0 and live:
+        more, remaining = apply_payment_to_commitments(live, remaining, now)
+        if more:
+            touched.extend(more)
+            matched_by = matched_by or "invoice"
+            primary = primary or more[0].id
+    for c in touched:
+        if c.state is CommitmentState.MISSED:
+            continue
+        audit.append({"commitment_id": c.id, "state": c.state,
+                      "amount_received": c.amount_received,
+                      "amount_remaining": c.amount_remaining, "days_late": c.days_late,
+                      "matched_by": "instrument" if c.id == instrument_cid else "invoice"})
+    return touched, primary, matched_by, audit
+
+
 def ingest_payment_event(
     store: Store,
     event: dict[str, Any],
@@ -162,10 +239,15 @@ def ingest_payment_event(
         return rule(IngestStatus.UNMATCHED, EventKind.PAYMENT_UNMATCHED,
                     f"invoice {invoice_id!r} is not in the ledger")
 
+    instrument_cid = resolve_commitment_id(event, entity)
+    touched, primary_cid, matched_by, commitment_audit = _match_commitments(
+        store, invoice_id, amount, now, instrument_cid,
+    )
     payment = Payment(
         id=f"pay_{event_id}", invoice_id=invoice_id, amount=amount,
         method=entity.get("method", "unknown"), razorpay_payment_id=entity["id"],
         razorpay_event_id=event_id, observed_at=now,
+        commitment_id=primary_cid, matched_by=matched_by,
     )
     open_promise = store.open_promise_for(invoice_id)
     concession = store.live_concession_for(invoice_id)
@@ -200,8 +282,36 @@ def ingest_payment_event(
                 "razorpay_event_id": event_id,
                 "invoice_state": updated_invoice.state,
                 "amount_waived": updated_invoice.amount_waived,
+                "commitment_id": primary_cid, "matched_by": matched_by,
             },
         )
+        for c in touched:
+            store.put_commitment(c)
+            if c.state is CommitmentState.MISSED:
+                continue
+            kind = (EventKind.COMMITMENT_FULFILLED if c.state is CommitmentState.FULFILLED
+                    else EventKind.COMMITMENT_PARTIALLY_FULFILLED)
+            store.append_event(
+                at=now, actor=Actor.RAILS, kind=kind,
+                invoice_id=invoice_id, debtor_id=invoice.debtor_id,
+                payload={"commitment_id": c.id, "committed_amount": c.committed_amount,
+                         "amount_received": c.amount_received,
+                         "amount_remaining": c.amount_remaining, "days_late": c.days_late,
+                         "matched_by": "instrument" if c.id == instrument_cid else "invoice",
+                         "razorpay_payment_id": payment.razorpay_payment_id,
+                         "razorpay_event_id": event_id, "outcome": c.state},
+            )
+            counters.inc(f"commitment.{c.state.value}")
+        for row in commitment_audit:
+            if row.get("late") or row.get("matched_by") == "instrument-stale":
+                store.append_event(
+                    at=now, actor=Actor.RAILS, kind=EventKind.COMMITMENT_PARTIALLY_FULFILLED
+                    if row.get("late") else EventKind.PAYMENT_OBSERVED,
+                    invoice_id=invoice_id, debtor_id=invoice.debtor_id,
+                    payload={**row, "note": "payment against a non-live commitment",
+                             "razorpay_event_id": event_id, "amount": payment.amount,
+                             "outcome": row.get("state")},
+                )
         if resolved_promise is not None:
             store.put_promise(resolved_promise)
             store.append_event(

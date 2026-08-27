@@ -10,24 +10,37 @@ Flow per invoice per day::
       -> outbound slot CLAIMED in the database, then sent, then audited
     debtor replies
       -> brain interprets into a typed intent
-      -> promises hit the ledger, offers are accepted, disputes and
-         stop-contact stand the agent down, term requests get an
-         immediate gated answer
+      -> a promise hits the ledger as *what was said*
+      -> policy rules on it (check_commitment); if allowed, an executable
+         PaymentCommitment is opened — exact amount, exact deadline, a
+         Razorpay Payment Link tagged with the commitment id — and the
+         debtor is told; if refused, the promise stays as evidence and the
+         refusal is audited
+      -> offers are accepted (becoming commitments), disputes and
+         stop-contact stand the agent down and cancel live commitments,
+         term requests get an immediate gated answer
+    daily tick
+      -> commitments past their deadline are MISSED, promises BROKEN,
+         concessions EXPIRED / BROKEN; escalation where earned; pending
+         confirmations and bounded near-deadline reminders go out
 
 Three invariants hold everywhere in this module:
 
-* nothing is sent and no concession is made without an ``allowed`` gate
-  decision, and every decision — allowed or blocked — is audited;
+* nothing is sent and no concession or commitment is made without an
+  ``allowed`` gate decision, and every decision — allowed or blocked — is
+  audited;
 * the loop never touches payment state. Money moves only in
-  :mod:`urudhi.rails.webhooks`, so recovery cannot be self-reported;
+  :mod:`urudhi.rails.webhooks`; a commitment is fulfilled only by rail
+  events matched to it, so recovery cannot be self-reported;
 * a brain failure defers; it never becomes permission.
 """
 
 from __future__ import annotations
 
 import enum
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Protocol
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
 
@@ -45,24 +58,31 @@ from urudhi.agent.intervention import (
     PriorIntervention,
 )
 from urudhi.agent.policy import (
+    CommitmentVerdict,
     ContactFacts,
     Decision,
     GateDecision,
     Offer,
     OfferType,
     PolicyConfig,
+    check_commitment,
     check_contact,
     decide_intervention,
     should_escalate,
 )
 from urudhi.audit.log import Actor, EventKind
+from urudhi.ledger.commitments import describe_commitment, profile_for
 from urudhi.ledger.models import (
     Channel,
+    CommitmentSource,
     Concession,
     ConcessionState,
     ConcessionType,
     Debtor,
+    InstrumentType,
     Invoice,
+    InvoiceState,
+    PaymentCommitment,
     PromiseState,
     PromiseToPay,
 )
@@ -70,10 +90,13 @@ from urudhi.ledger.money import format_inr
 from urudhi.ledger.transitions import (
     ACTIVE_STATES,
     accept_concession,
+    cancel_commitment,
     escalate,
+    expire_commitment,
     expire_concession,
     expire_promise,
     offer_concession,
+    open_commitment,
     record_dispute,
     record_promise,
     stop_contact,
@@ -103,6 +126,7 @@ class Action(enum.StrEnum):
     MESSAGE_FAILED = "message_failed"
     DEFERRED = "deferred"              # brain unavailable; try again next tick
     PROMISE_RECORDED = "promise_recorded"
+    COMMITMENT_CREATED = "commitment_created"
     OFFER_ACCEPTED = "offer_accepted"
     COUNTER_OFFERED = "counter_offered"
     DISPUTE_STOOD_DOWN = "dispute_stood_down"
@@ -118,6 +142,8 @@ class TurnResult(BaseModel):
     gate: GateDecision | None = None
     decision: Decision | None = None
     intervention: InterventionKind | None = None
+    commitment_id: str | None = None
+    commitment_verdict: CommitmentVerdict | None = None
 
 
 _RESPONDING_INTENTS = frozenset({Intent.REQUEST_TERMS, Intent.QUESTION})
@@ -170,20 +196,22 @@ class RecoveryAgent:
                               detail=contact.reason, gate=contact)
 
         context = self._decision_context(invoice, now, responding_to)
-        running = context.open_promise_on is not None or (
-            context.live_concession or ""
-        ).startswith("installments")
+        running = (
+            context.open_promise_on is not None
+            or context.active_commitment is not None
+            or (context.live_concession or "").startswith("installments")
+        )
         if running:
             self._store.append_event(
                 at=now, actor=Actor.POLICY, kind=EventKind.INTERVENTION_DECIDED,
                 invoice_id=invoice.id, debtor_id=debtor.id,
                 payload={"proposed": None, "final": InterventionKind.WAIT_FOR_PROMISE,
-                         "modified": False, "reasons": ["a promise or plan is running"],
+                         "modified": False, "reasons": ["a commitment is running"],
                          "gates": [], "context": context.model_dump(mode="json")},
             )
             return TurnResult(invoice_id=invoice_id, action=Action.WAITED,
                               intervention=InterventionKind.WAIT_FOR_PROMISE,
-                              detail="a promise or plan is running; not chasing over it")
+                              detail="a commitment is running; not chasing over it")
 
         try:
             proposal = self._brain.recommend_intervention(context)
@@ -248,11 +276,15 @@ class RecoveryAgent:
                 amount = (concession.installments[0].amount
                           if concession.type is ConcessionType.INSTALLMENTS
                           else concession.settlement_amount)
-            link = self._rails.create_payment_link(
-                amount=amount, description=f"Invoice {invoice.number} — {debtor.name}",
-                invoice_id=invoice.id, customer_name=debtor.name,
-                customer_email=debtor.email, customer_contact=debtor.phone,
-            )
+            try:
+                link = self._rails.create_payment_link(
+                    amount=amount, description=f"Invoice {invoice.number} — {debtor.name}",
+                    invoice_id=invoice.id, customer_name=debtor.name,
+                    customer_email=debtor.email, customer_contact=debtor.phone,
+                    reference_id=f"{invoice.id}/{self._next_link_seq(invoice)}",
+                )
+            except Exception as error:  # the rail is external; its failure is a fact to audit
+                return self._rail_failed(invoice, debtor, now, "payment_link", amount, error)
             payment_url = link.get("short_url")
             if concession is not None:
                 concession = concession.model_copy(update={"payment_link_url": payment_url})
@@ -263,17 +295,7 @@ class RecoveryAgent:
         except BrainUnavailable as error:
             return self._defer(invoice, debtor, now, "draft", str(error))
 
-        # Claim the attempt slot BEFORE sending: a crash after delivery can't resend.
-        local_day = self._config.local(now).date().isoformat()
-        key = f"{invoice.id}:{local_day}:{facts.attempts_total + 1}"
-        claimed = self._store.claim_outbound(
-            key, invoice.id, local_day, now, debtor.preferred_channel.value,
-            {"intervention": final.value, "responding": responding_to is not None},
-        )
-        if not claimed:
-            return TurnResult(invoice_id=invoice.id, action=Action.BLOCKED, decision=decision,
-                              detail=f"attempt {key} already claimed; not sending twice")
-
+        extra = {"intervention": final.value, "responding": responding_to is not None}
         if concession is not None:
             self._store.put_concession(concession)
             self._store.append_event(
@@ -289,7 +311,27 @@ class RecoveryAgent:
                 },
             )
             counters.inc(f"offer.{concession.type.value}")
+            extra["concession_id"] = concession.id
+        return self._send(invoice, debtor, facts, text, final, now, decision=decision,
+                          payment_url=payment_url, extra=extra)
 
+    def _send(
+        self, invoice: Invoice, debtor: Debtor, facts: ContactFacts, text: str,
+        kind: InterventionKind, now: datetime, *, decision: Decision | None = None,
+        payment_url: str | None = None, extra: dict | None = None,
+    ) -> TurnResult:
+        """Claim the attempt slot BEFORE sending — a crash after delivery can't resend."""
+        local_day = self._config.local(now).date().isoformat()
+        key = f"{invoice.id}:{local_day}:{facts.attempts_total + 1}"
+        claimed = self._store.claim_outbound(
+            key, invoice.id, local_day, now, debtor.preferred_channel.value,
+            {"intervention": kind.value, **{k: v for k, v in (extra or {}).items()
+                                            if k in ("responding", "commitment_id")}},
+        )
+        if not claimed:
+            return TurnResult(invoice_id=invoice.id, action=Action.BLOCKED, decision=decision,
+                              intervention=kind,
+                              detail=f"attempt {key} already claimed; not sending twice")
         try:
             message_id = self._outbox.send(
                 debtor, debtor.preferred_channel, text,
@@ -302,28 +344,27 @@ class RecoveryAgent:
                 at=now, actor=Actor.SYSTEM, kind=EventKind.MESSAGE_FAILED,
                 invoice_id=invoice.id, debtor_id=debtor.id,
                 payload={"channel": debtor.preferred_channel, "outbound_key": key,
-                         "error": type(error).__name__, "intervention": final},
+                         "error": type(error).__name__, "intervention": kind},
             )
             counters.inc("message.failed")
             log.warning("message.failed", invoice=invoice.id, error=type(error).__name__)
             return TurnResult(invoice_id=invoice.id, action=Action.MESSAGE_FAILED,
-                              decision=decision, intervention=final, detail=str(error))
+                              decision=decision, intervention=kind, detail=str(error))
         self._store.mark_outbound(key, "sent")
         self._store.append_event(
             at=now, actor=Actor.AGENT, kind=EventKind.MESSAGE_SENT,
             invoice_id=invoice.id, debtor_id=debtor.id,
             payload={
-                "channel": debtor.preferred_channel, "text": text, "intervention": final,
+                "channel": debtor.preferred_channel, "text": text, "intervention": kind,
                 "outbound_key": key, "message_id": message_id, "brain": self.brain_name,
-                "concession_id": concession.id if concession else None,
-                "payment_url": payment_url,
-                "responding": responding_to is not None,
+                "payment_url": payment_url, **(extra or {}),
             },
         )
         counters.inc("message.sent")
         return TurnResult(
             invoice_id=invoice.id, action=Action.MESSAGE_SENT, decision=decision,
-            intervention=final, detail=f"{final} sent on {debtor.preferred_channel}",
+            intervention=kind, detail=f"{kind} sent on {debtor.preferred_channel}",
+            commitment_id=(extra or {}).get("commitment_id"),
         )
 
     # -- inbound -----------------------------------------------------------
@@ -394,10 +435,29 @@ class RecoveryAgent:
     # -- daily housekeeping ------------------------------------------------
 
     def daily_tick(self, today: date, now: datetime) -> list[TurnResult]:
-        """Expire lapsed promises and concessions, then escalate where earned."""
+        """Rule on lapsed commitments, promises and concessions; escalate where earned;
+        send pending commitment confirmations and bounded near-deadline reminders."""
         results: list[TurnResult] = []
         for invoice in self._store.all_invoices():
             touched = False
+
+            for commitment in self._store.live_commitments_for(invoice.id):
+                missed = expire_commitment(commitment, today, now)
+                if missed is None:
+                    continue
+                self._store.put_commitment(missed)
+                self._store.append_event(
+                    at=now, actor=Actor.SYSTEM, kind=EventKind.COMMITMENT_MISSED,
+                    invoice_id=invoice.id, debtor_id=invoice.debtor_id,
+                    payload={"commitment_id": missed.id, "committed_amount": missed.committed_amount,
+                             "amount_received": missed.amount_received,
+                             "amount_remaining": missed.amount_remaining,
+                             "due_on": missed.due_on.isoformat(), "source": missed.source,
+                             "reason": "deadline passed without the committed amount on the rails"},
+                )
+                counters.inc("commitment.missed")
+                touched = True
+
             promise = self._store.open_promise_for(invoice.id)
             if promise is not None:
                 paid = self._store.paid_between(
@@ -432,6 +492,9 @@ class RecoveryAgent:
                     counters.inc(f"concession.{ruled.state.value}")
                     touched = True
 
+            if invoice.state in ACTIVE_STATES:
+                results.extend(self._commitment_messages(invoice, today, now))
+
             if not touched or invoice.state not in ACTIVE_STATES:
                 continue
             facts = self._contact_facts(invoice, Channel.SYSTEM, now)
@@ -446,6 +509,19 @@ class RecoveryAgent:
                 ))
         return results
 
+    def _commitment_messages(self, invoice: Invoice, today: date, now: datetime) -> list[TurnResult]:
+        """Confirmations that could not go out earlier, and one bounded reminder."""
+        out: list[TurnResult] = []
+        for commitment in self._store.live_commitments_for(invoice.id):
+            if not commitment.instrument_sent:
+                out.append(self._confirm_commitment(invoice, commitment, now))
+                continue
+            days_left = (commitment.due_on - today).days
+            if (self._config.commitment_reminder_days_before > 0 and not commitment.reminder_sent
+                    and 0 <= days_left <= self._config.commitment_reminder_days_before):
+                out.append(self._remind_commitment(invoice, commitment, now))
+        return out
+
     # -- reply handlers ----------------------------------------------------
 
     def _stop(self, invoice: Invoice, debtor: Debtor, interpretation: ReplyInterpretation,
@@ -453,6 +529,7 @@ class RecoveryAgent:
         updated = stop_contact(invoice)
         self._store.put_invoice(updated)
         self._withdraw_live_concession(invoice, now, "stop-contact")
+        self._cancel_live_commitments(invoice, now, "debtor asked us to stop")
         self._store.append_event(
             at=now, actor=Actor.POLICY, kind=EventKind.STOP_CONTACT_HONORED,
             invoice_id=invoice.id, debtor_id=debtor.id,
@@ -466,6 +543,7 @@ class RecoveryAgent:
         updated = record_dispute(invoice)
         self._store.put_invoice(updated)
         self._withdraw_live_concession(invoice, now, "dispute")
+        self._cancel_live_commitments(invoice, now, "invoice disputed; a human owns it")
         claims_paid = interpretation.intent is Intent.CLAIMS_PAID
         self._store.append_event(
             at=now, actor=Actor.POLICY, kind=EventKind.DISPUTE_RECORDED,
@@ -488,22 +566,17 @@ class RecoveryAgent:
     def _record_promise(
         self, invoice: Invoice, debtor: Debtor,
         interpretation: ReplyInterpretation, now: datetime,
+        *, source: CommitmentSource = CommitmentSource.PROMISE,
+        concession: Concession | None = None,
     ) -> TurnResult:
-        promised_on = interpretation.promised_on or (now.date() + timedelta(days=7))
-        horizon = (promised_on - now.date()).days
-        if horizon > self._config.max_promise_horizon_days:
-            decision = GateDecision.block(
-                "promise_horizon",
-                f"promised date {horizon} days out exceeds "
-                f"{self._config.max_promise_horizon_days}-day horizon",
-            )
-            self._audit_gate(decision, invoice, now)
-            return TurnResult(
-                invoice_id=invoice.id, action=Action.COUNTER_OFFERED,
-                detail="promise too far out; agent must counter with a nearer date",
-                gate=decision,
-            )
+        """Record what was said; then ask policy whether it may become a commitment.
 
+        The promise is *always* recorded — it is evidence. Only policy decides
+        whether it becomes an executable commitment; if not, the promise is
+        marked DECLINED, the invoice stays chaseable, and the refusal (with
+        every checklist line) is audited.
+        """
+        promised_on = interpretation.promised_on or (now.date() + timedelta(days=7))
         amount = min(interpretation.promised_amount or invoice.balance, invoice.balance)
         existing = self._store.open_promise_for(invoice.id)
         promise = PromiseToPay(
@@ -529,14 +602,38 @@ class RecoveryAgent:
                 "promised_on": promise.promised_on.isoformat(),
                 "confidence": promise.confidence, "verbatim": promise.verbatim,
                 "date_inferred": interpretation.promised_on is None,
+                "partial": promise.amount < invoice.balance,
                 "superseded": superseded.id if superseded else None,
             },
         )
         counters.inc("promise.recorded")
+
+        outcome = self.open_commitment(
+            updated_invoice, debtor, amount=promise.amount, due_on=promise.promised_on, now=now,
+            source=source, promise=promise, concession=concession,
+            confidence=interpretation.confidence, evidence=interpretation.verbatim,
+        )
+        if outcome.commitment is not None:
+            return TurnResult(
+                invoice_id=invoice.id, action=Action.COMMITMENT_CREATED,
+                commitment_id=outcome.commitment.id, commitment_verdict=outcome.verdict,
+                intervention=(InterventionKind.COMMITMENT_CONFIRMATION
+                              if outcome.confirmation and outcome.confirmation.action is Action.MESSAGE_SENT
+                              else None),
+                detail=f"{describe_commitment(outcome.commitment)} "
+                       f"(promise confidence {promise.confidence:.2f})",
+            )
+        # Declined: the words stay on the ledger; the invoice does not wait on them.
+        self._store.put_promise(promise.model_copy(
+            update={"state": PromiseState.DECLINED, "resolved_at": now}))
+        self._store.put_invoice(updated_invoice.model_copy(update={
+            "state": (InvoiceState.PARTIALLY_PAID if invoice.amount_paid > 0
+                      else InvoiceState.OUTSTANDING)}))
         return TurnResult(
             invoice_id=invoice.id, action=Action.PROMISE_RECORDED,
-            detail=f"{format_inr(promise.amount)} by {promise.promised_on} "
-                   f"(confidence {promise.confidence:.2f})",
+            commitment_verdict=outcome.verdict,
+            detail=f"{format_inr(promise.amount)} by {promise.promised_on} recorded as said; "
+                   f"no commitment: {outcome.verdict.reason}",
         )
 
     def _accept_offer(
@@ -560,15 +657,251 @@ class RecoveryAgent:
         )
         counters.inc("offer.accepted")
         if accepted.type is ConcessionType.DISCOUNT:
-            # Accepting a settlement is a promise to pay the settlement amount by pay-by.
+            # Accepting a settlement is a promise to pay the settlement amount by
+            # pay-by — and, if policy agrees, an executable commitment for it.
             promised_on = min(interpretation.promised_on or accepted.pay_by, accepted.pay_by)
             commitment = interpretation.model_copy(update={
                 "promised_amount": accepted.settlement_amount, "promised_on": promised_on,
                 "confidence": max(interpretation.confidence, 0.8),
             })
-            self._record_promise(invoice, debtor, commitment, now)
-        return TurnResult(invoice_id=invoice.id, action=Action.OFFER_ACCEPTED,
-                          detail=f"{accepted.type} accepted: {accepted.rationale or ''}".strip())
+            result = self._record_promise(invoice, debtor, commitment, now,
+                                          source=CommitmentSource.CONCESSION, concession=accepted)
+            return TurnResult(
+                invoice_id=invoice.id, action=Action.OFFER_ACCEPTED,
+                commitment_id=result.commitment_id, commitment_verdict=result.commitment_verdict,
+                detail=f"discount settlement accepted → {result.detail}",
+            )
+        created = self._open_installment_commitments(invoice, debtor, accepted, interpretation, now)
+        return TurnResult(
+            invoice_id=invoice.id, action=Action.OFFER_ACCEPTED,
+            commitment_id=created[0].id if created else None,
+            detail=f"installment plan accepted: {len(created)} commitments opened",
+        )
+
+    # -- commitments -------------------------------------------------------
+
+    class _CommitmentOutcome(BaseModel):
+        verdict: CommitmentVerdict
+        commitment: PaymentCommitment | None = None
+        confirmation: TurnResult | None = None
+
+    def open_commitment(
+        self, invoice: Invoice, debtor: Debtor, *, amount: int, due_on: date, now: datetime,
+        source: CommitmentSource, promise: PromiseToPay | None = None,
+        concession: Concession | None = None, installment_index: int | None = None,
+        confidence: float = 0.0, evidence: str = "", confirm: bool = True,
+        actor: Actor = Actor.POLICY,
+    ) -> RecoveryAgent._CommitmentOutcome:
+        """Promise → policy → executable commitment → rail instrument → tell the debtor.
+
+        The verdict and every checklist line are audited whether or not the
+        commitment is created; a refused commitment leaves the promise on the
+        ledger as evidence.
+        """
+        live_concession = self._store.live_concession_for(invoice.id)
+        self._store.append_event(
+            at=now, actor=Actor.AGENT, kind=EventKind.COMMITMENT_PROPOSED,
+            invoice_id=invoice.id, debtor_id=debtor.id,
+            payload={"source": source, "amount": amount, "due_on": due_on.isoformat(),
+                     "promise_id": promise.id if promise else None,
+                     "concession_id": concession.id if concession else None,
+                     "installment_index": installment_index,
+                     "confidence": confidence, "verbatim": evidence,
+                     "partial": amount < invoice.balance},
+        )
+        verdict = check_commitment(
+            invoice, amount, due_on, now.date(), self._config,
+            live_concession=None if concession is not None else live_concession,
+        )
+        checks = [c.model_dump() for c in verdict.checks]
+        if not verdict.allowed:
+            self._store.append_event(
+                at=now, actor=actor, kind=EventKind.COMMITMENT_BLOCKED,
+                invoice_id=invoice.id, debtor_id=debtor.id,
+                payload={"source": source, "amount": amount, "due_on": due_on.isoformat(),
+                         "promise_id": promise.id if promise else None,
+                         "reason": verdict.reason, "checks": checks},
+            )
+            counters.inc("commitment.blocked")
+            return self._CommitmentOutcome(verdict=verdict)
+        self._store.append_event(
+            at=now, actor=actor, kind=EventKind.COMMITMENT_APPROVED,
+            invoice_id=invoice.id, debtor_id=debtor.id,
+            payload={"source": source, "amount": amount, "due_on": due_on.isoformat(),
+                     "promise_id": promise.id if promise else None,
+                     "reason": verdict.reason, "checks": checks},
+        )
+
+        n = len(self._store.commitments_for(invoice.id)) + 1
+        cid = f"cmt_{invoice.id}_{n}"
+        due_at = datetime.combine(due_on, time(23, 59, 59), tzinfo=ZoneInfo(self._config.timezone))
+        instrument_type = instrument_id = payment_url = None
+        link = None
+        if self._rails is not None:
+            try:
+                link = self._rails.create_payment_link(
+                    amount=amount,
+                    description=f"Invoice {invoice.number} — {format_inr(amount)} by {due_on:%d %b %Y}",
+                    invoice_id=invoice.id, commitment_id=cid, customer_name=debtor.name,
+                    customer_email=debtor.email, customer_contact=debtor.phone,
+                    expire_by=int(due_at.timestamp()),
+                )
+            except Exception as error:
+                # The commitment is what policy accepted; the instrument is how it is paid.
+                # A rail failure is audited and the commitment stands without a link —
+                # money can still arrive on the invoice and be matched to it.
+                self._rail_failed(invoice, debtor, now, "commitment_link", amount, error, cid)
+                link = None
+        if link is not None:
+            instrument_type, instrument_id, payment_url = (
+                InstrumentType.PAYMENT_LINK, link.get("id"), link.get("short_url"),
+            )
+            self._store.append_event(
+                at=now, actor=Actor.RAILS, kind=EventKind.PAYMENT_INSTRUMENT_CREATED,
+                invoice_id=invoice.id, debtor_id=debtor.id,
+                payload={"commitment_id": cid, "instrument_type": instrument_type,
+                         "instrument_id": instrument_id, "payment_url": payment_url,
+                         "amount": amount, "expire_by": due_at.isoformat(),
+                         "notes": link.get("notes"), "reference_id": link.get("reference_id")},
+            )
+            counters.inc("commitment.instrument_created")
+
+        commitment = PaymentCommitment(
+            id=cid, invoice_id=invoice.id, debtor_id=debtor.id,
+            promise_id=promise.id if promise else None,
+            concession_id=concession.id if concession else None,
+            installment_index=installment_index, source=source,
+            committed_amount=amount, due_on=due_on, due_at=due_at,
+            instrument_type=instrument_type, instrument_id=instrument_id, payment_url=payment_url,
+            created_at=now, accepted_at=now if promise is not None else None,
+            confidence=confidence, evidence=evidence, rationale=verdict.reason,
+        )
+        commitment, superseded = open_commitment(
+            invoice, commitment, self._store.live_commitments_for(invoice.id)
+        )
+        with self._store.transaction():
+            for old in superseded:
+                self._store.put_commitment(old)
+                self._store.append_event(
+                    at=now, actor=Actor.POLICY, kind=EventKind.COMMITMENT_SUPERSEDED,
+                    invoice_id=invoice.id, debtor_id=debtor.id,
+                    payload={"commitment_id": old.id, "superseded_by": cid,
+                             "committed_amount": old.committed_amount,
+                             "amount_received": old.amount_received},
+                )
+            self._store.put_commitment(commitment)
+            self._store.append_event(
+                at=now, actor=Actor.POLICY, kind=EventKind.COMMITMENT_CREATED,
+                invoice_id=invoice.id, debtor_id=debtor.id,
+                payload={"commitment_id": cid, "source": source,
+                         "committed_amount": amount, "due_on": due_on.isoformat(),
+                         "due_at": due_at.isoformat(), "instrument_type": instrument_type,
+                         "instrument_id": instrument_id, "payment_url": payment_url,
+                         "promise_id": promise.id if promise else None,
+                         "concession_id": concession.id if concession else None,
+                         "installment_index": installment_index,
+                         "confidence": confidence, "reason": verdict.reason},
+            )
+        counters.inc("commitment.created")
+        log.info("commitment.created", invoice=invoice.id, commitment=cid, amount=amount,
+                 due=due_on.isoformat(), source=source.value)
+        confirmation = self._confirm_commitment(invoice, commitment, now) if confirm else None
+        return self._CommitmentOutcome(verdict=verdict, commitment=commitment,
+                                       confirmation=confirmation)
+
+    def _open_installment_commitments(
+        self, invoice: Invoice, debtor: Debtor, plan: Concession,
+        interpretation: ReplyInterpretation, now: datetime,
+    ) -> list[PaymentCommitment]:
+        created: list[PaymentCommitment] = []
+        for index, installment in enumerate(plan.installments, start=1):
+            outcome = self.open_commitment(
+                invoice, debtor, amount=installment.amount, due_on=installment.due_on, now=now,
+                source=CommitmentSource.INSTALLMENT, concession=plan, installment_index=index,
+                confidence=interpretation.confidence, evidence=interpretation.verbatim,
+                confirm=False,
+            )
+            if outcome.commitment is not None:
+                created.append(outcome.commitment)
+        if created:
+            self._confirm_commitment(invoice, created[0], now, plan=created)
+        return created
+
+    def _confirm_commitment(self, invoice: Invoice, commitment: PaymentCommitment,
+                            now: datetime, plan: list[PaymentCommitment] | None = None) -> TurnResult:
+        """Tell the debtor what was agreed and hand over the instrument (responding mode)."""
+        debtor = self._store.get_debtor(invoice.debtor_id)
+        facts = self._contact_facts(invoice, debtor.preferred_channel, now, responding=True)
+        contact = check_contact(invoice, facts, self._config)
+        self._audit_gate(contact, invoice, now)
+        if not contact.allowed:
+            return TurnResult(invoice_id=invoice.id, action=Action.BLOCKED, gate=contact,
+                              commitment_id=commitment.id,
+                              intervention=InterventionKind.COMMITMENT_CONFIRMATION,
+                              detail=f"confirmation held: {contact.reason}")
+        items = plan or [commitment]
+        lines = [f"You agreed to pay {format_inr(c.committed_amount)} by {c.due_on:%d %b %Y}"
+                 + (f" — pay here: {c.payment_url}" if c.payment_url and len(items) > 1 else "")
+                 for c in items]
+        offer_text = ("Confirming what we agreed: " + "; ".join(lines) + ".")
+        context = self._message_context(invoice, debtor, now, offer_text,
+                                        commitment.payment_url,
+                                        InterventionKind.COMMITMENT_CONFIRMATION)
+        try:
+            text = self._brain.draft_message(context)
+        except BrainUnavailable as error:
+            return self._defer(invoice, debtor, now, "draft", str(error))
+        result = self._send(invoice, debtor, facts, text, InterventionKind.COMMITMENT_CONFIRMATION,
+                            now, payment_url=commitment.payment_url,
+                            extra={"commitment_id": commitment.id, "responding": True,
+                                   "commitment_ids": [c.id for c in items]})
+        if result.action is Action.MESSAGE_SENT:
+            for c in items:
+                self._store.put_commitment(c.model_copy(update={"instrument_sent": True}))
+            counters.inc("commitment.confirmed")
+        return result
+
+    def _remind_commitment(self, invoice: Invoice, commitment: PaymentCommitment,
+                           now: datetime) -> TurnResult:
+        """One bounded nudge before the deadline — a normal contact, fully gated."""
+        debtor = self._store.get_debtor(invoice.debtor_id)
+        facts = self._contact_facts(invoice, debtor.preferred_channel, now)
+        contact = check_contact(invoice, facts, self._config)
+        self._audit_gate(contact, invoice, now)
+        # A reminder never earns a second chance: mark it so the tick doesn't retry daily.
+        self._store.put_commitment(commitment.model_copy(update={"reminder_sent": True}))
+        if not contact.allowed:
+            return TurnResult(invoice_id=invoice.id, action=Action.BLOCKED, gate=contact,
+                              commitment_id=commitment.id,
+                              intervention=InterventionKind.COMMITMENT_REMINDER,
+                              detail=f"reminder skipped: {contact.reason}")
+        offer_text = (f"A gentle reminder: {format_inr(commitment.amount_remaining)} is due by "
+                      f"{commitment.due_on:%d %b %Y} as agreed.")
+        context = self._message_context(invoice, debtor, now, offer_text, commitment.payment_url,
+                                        InterventionKind.COMMITMENT_REMINDER)
+        try:
+            text = self._brain.draft_message(context)
+        except BrainUnavailable as error:
+            return self._defer(invoice, debtor, now, "draft", str(error))
+        result = self._send(invoice, debtor, facts, text, InterventionKind.COMMITMENT_REMINDER, now,
+                            payment_url=commitment.payment_url,
+                            extra={"commitment_id": commitment.id, "responding": False})
+        if result.action is Action.MESSAGE_SENT:
+            counters.inc("commitment.reminded")
+        return result
+
+    def _cancel_live_commitments(self, invoice: Invoice, now: datetime, reason: str) -> None:
+        for commitment in self._store.live_commitments_for(invoice.id):
+            cancelled = cancel_commitment(commitment, now, reason)
+            self._store.put_commitment(cancelled)
+            self._store.append_event(
+                at=now, actor=Actor.POLICY, kind=EventKind.COMMITMENT_CANCELLED,
+                invoice_id=invoice.id, debtor_id=invoice.debtor_id,
+                payload={"commitment_id": cancelled.id, "reason": reason,
+                         "committed_amount": cancelled.committed_amount,
+                         "amount_received": cancelled.amount_received},
+            )
+            counters.inc("commitment.cancelled")
 
     # -- internals ---------------------------------------------------------
 
@@ -576,6 +909,7 @@ class RecoveryAgent:
         updated = escalate(invoice)
         self._store.put_invoice(updated)
         self._withdraw_live_concession(invoice, now, "escalation")
+        self._cancel_live_commitments(invoice, now, f"escalated: {reason}")
         self._store.append_event(
             at=now, actor=Actor.POLICY, kind=EventKind.ESCALATED,
             invoice_id=invoice.id, debtor_id=invoice.debtor_id,
@@ -584,6 +918,20 @@ class RecoveryAgent:
         counters.inc("escalated")
         return TurnResult(invoice_id=invoice.id, action=Action.ESCALATED, detail=reason,
                           intervention=InterventionKind.ESCALATE_HUMAN)
+
+    def _rail_failed(self, invoice: Invoice, debtor: Debtor, now: datetime, job: str,
+                     amount: int, error: Exception, commitment_id: str | None = None) -> TurnResult:
+        self._store.append_event(
+            at=now, actor=Actor.RAILS, kind=EventKind.RAIL_FAILED,
+            invoice_id=invoice.id, debtor_id=debtor.id,
+            payload={"job": job, "amount": amount, "commitment_id": commitment_id,
+                     "error": f"{type(error).__name__}: {str(error)[:160]}",
+                     "reason": "payment rail refused or failed; nothing issued"},
+        )
+        counters.inc("rail.failed")
+        log.warning("rail.failed", invoice=invoice.id, job=job, error=type(error).__name__)
+        return TurnResult(invoice_id=invoice.id, action=Action.DEFERRED, commitment_id=commitment_id,
+                          detail=f"payment rail failed during {job}; nothing sent")
 
     def _defer(self, invoice: Invoice, debtor: Debtor, now: datetime, job: str,
                error: str) -> TurnResult:
@@ -624,6 +972,9 @@ class RecoveryAgent:
             offered_at=now, rationale=rationale,
         )
 
+    def _next_link_seq(self, invoice: Invoice) -> int:
+        return len(self._store.events_for(invoice.id, EventKind.MESSAGE_SENT)) + 1
+
     def _contact_facts(self, invoice: Invoice, channel: Channel, now: datetime,
                        responding: bool = False) -> ContactFacts:
         local_day = self._config.local(now).date().isoformat()
@@ -649,6 +1000,9 @@ class RecoveryAgent:
                           responding_to: ReplyInterpretation | None) -> DecisionContext:
         promises = self._store.promises_for(invoice.id)
         concessions = self._store.concessions_for(invoice.id)
+        commitments = self._store.commitments_for_debtor(invoice.debtor_id)
+        profile = profile_for(commitments, invoice.human_released_at)
+        active = self._store.live_commitments_for(invoice.id)
         open_promise = next((p for p in promises if p.state is PromiseState.OPEN), None)
         live = next((c for c in concessions if c.live), None)
         total, _, last = self._store.attempt_facts(invoice.id, self._config.local(now).date().isoformat(),
@@ -673,6 +1027,13 @@ class RecoveryAgent:
             ),
             open_promise_amount=open_promise.amount if open_promise else None,
             open_promise_on=open_promise.promised_on if open_promise else None,
+            commitments_total=profile.commitments,
+            commitments_fulfilled=profile.fulfilled,
+            commitments_partially_fulfilled=profile.partially_fulfilled,
+            commitments_missed=profile.missed,
+            commitment_fulfillment_rate=profile.fulfillment_rate,
+            commitment_average_delay_days=profile.average_delay_days,
+            active_commitment=describe_commitment(active[0]) if active else None,
             last_intent=last_intent, last_reply_summary=last_summary or "",
             live_concession=_describe_concession(live) if live else None,
             concession_history=[f"{_describe_concession(c)} → {c.state}" for c in concessions
@@ -698,9 +1059,13 @@ class RecoveryAgent:
                     break
                 if later.kind is EventKind.MESSAGE_RECEIVED:
                     outcome = f"replied: {later.payload.get('intent')}"
+                elif later.kind is EventKind.COMMITMENT_CREATED:
+                    outcome = f"committed {format_inr(later.payload.get('committed_amount', 0))}"
                 elif later.kind is EventKind.PAYMENT_OBSERVED:
                     outcome = f"paid {format_inr(later.payload.get('amount', 0))}"
                     break
+                elif later.kind is EventKind.COMMITMENT_MISSED:
+                    outcome = "commitment missed"
                 elif later.kind is EventKind.PROMISE_RESOLVED:
                     outcome = f"promise {later.payload.get('outcome')}"
             out.append(PriorIntervention(on=event.at.date(), kind=InterventionKind(kind),
@@ -722,14 +1087,23 @@ class RecoveryAgent:
 
     def _history_summary(self, invoice: Invoice) -> str:
         parts: list[str] = []
-        promises = self._store.promises_for(invoice.id)
-        broken = [p for p in promises if p.state is PromiseState.BROKEN]
-        if broken:
-            last = broken[-1]
+        commitments = self._store.commitments_for(invoice.id)
+        missed = [c for c in commitments if c.state.value == "missed"]
+        if missed:
+            last = missed[-1]
             parts.append(
-                f"On {last.made_at:%d %b} you committed to {format_inr(last.amount)} by "
-                f"{last.promised_on:%d %b}; we have not seen it on our side."
+                f"On {last.created_at:%d %b} you committed to {format_inr(last.committed_amount)} by "
+                f"{last.due_on:%d %b}; we have not seen it on our side."
             )
+        else:
+            promises = self._store.promises_for(invoice.id)
+            broken = [p for p in promises if p.state is PromiseState.BROKEN]
+            if broken:
+                last_p = broken[-1]
+                parts.append(
+                    f"On {last_p.made_at:%d %b} you committed to {format_inr(last_p.amount)} by "
+                    f"{last_p.promised_on:%d %b}; we have not seen it on our side."
+                )
         if invoice.amount_paid > 0:
             parts.append(f"Thank you for the {format_inr(invoice.amount_paid)} received so far.")
         return " ".join(parts)

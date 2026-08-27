@@ -13,6 +13,8 @@ from __future__ import annotations
 from datetime import date, datetime
 
 from urudhi.ledger.models import (
+    CommitmentSource,
+    CommitmentState,
     Concession,
     ConcessionState,
     ConcessionType,
@@ -20,6 +22,7 @@ from urudhi.ledger.models import (
     Invoice,
     InvoiceState,
     Payment,
+    PaymentCommitment,
     PromiseState,
     PromiseToPay,
 )
@@ -359,3 +362,127 @@ def human_close(invoice: Invoice) -> Invoice:
     if invoice.state is InvoiceState.CLOSED:
         return invoice
     return invoice.model_copy(update={"state": InvoiceState.CLOSED})
+
+
+# -- payment commitments -------------------------------------------------------
+#
+# A commitment is what policy *accepted* from a promise: an exact amount and an
+# exact deadline, executable through a rail-side instrument. These transitions
+# never touch invoice money — a commitment is fulfilled only by Payment rows the
+# webhook path matched to it, and missed only by the calendar.
+
+
+def open_commitment(
+    invoice: Invoice,
+    commitment: PaymentCommitment,
+    live: list[PaymentCommitment],
+) -> tuple[PaymentCommitment, list[PaymentCommitment]]:
+    """Put a policy-approved commitment on the ledger, superseding what it replaces.
+
+    A promise / settlement / human arrangement replaces every live commitment
+    on the invoice; an installment replaces only live commitments that are
+    *not* installments of the same plan (so a plan's installments coexist).
+    Returns ``(commitment, superseded)``.
+    """
+    _require_active(invoice, "open a commitment")
+    if commitment.invoice_id != invoice.id:
+        raise InvalidTransition("commitment references a different invoice")
+    if commitment.committed_amount <= 0:
+        raise InvalidTransition("commitment amount must be positive")
+    if commitment.committed_amount > invoice.balance:
+        raise InvalidTransition(
+            f"commitment {commitment.committed_amount} exceeds balance {invoice.balance}"
+        )
+    if commitment.due_on < commitment.created_at.date():
+        raise InvalidTransition("commitment deadline cannot be in the past")
+    superseded = []
+    for other in live:
+        if not other.live or other.id == commitment.id:
+            continue
+        same_plan = (
+            commitment.source is CommitmentSource.INSTALLMENT
+            and other.source is CommitmentSource.INSTALLMENT
+            and other.concession_id == commitment.concession_id
+        )
+        if same_plan:
+            continue
+        superseded.append(other.model_copy(update={
+            "state": CommitmentState.SUPERSEDED, "resolved_at": commitment.created_at,
+            "cancel_reason": f"superseded by {commitment.id}",
+        }))
+    return commitment.model_copy(update={"state": CommitmentState.ACTIVE}), superseded
+
+
+def apply_payment_to_commitments(
+    commitments: list[PaymentCommitment],
+    amount: int,
+    observed_at: datetime,
+) -> tuple[list[PaymentCommitment], int]:
+    """Allocate observed money to live commitments, earliest deadline first.
+
+    Returns the updated commitments (only those touched) and the paise left
+    over after every live commitment was satisfied. A commitment paid in
+    full after its deadline is still FULFILLED — with ``days_late`` recorded —
+    because the money did arrive; the calendar only rules MISSED when the
+    daily tick runs first.
+    """
+    touched: list[PaymentCommitment] = []
+    remaining = amount
+    paid_on = observed_at.date()
+    ordered = sorted(
+        (c for c in commitments if c.live),
+        key=lambda c: (c.due_on, c.installment_index or 0, c.created_at),
+    )
+    for c in ordered:
+        if remaining <= 0:
+            break
+        take = min(remaining, c.amount_remaining)
+        if take <= 0:
+            continue
+        remaining -= take
+        received = c.amount_received + take
+        if received >= c.committed_amount:
+            late = max(0, (paid_on - c.due_on).days)
+            touched.append(c.model_copy(update={
+                "state": CommitmentState.FULFILLED, "amount_received": received,
+                "fulfilled_at": observed_at, "resolved_at": observed_at, "days_late": late,
+            }))
+        else:
+            touched.append(c.model_copy(update={
+                "state": CommitmentState.PARTIALLY_FULFILLED, "amount_received": received,
+            }))
+    return touched, remaining
+
+
+def note_late_payment(commitment: PaymentCommitment, amount: int) -> PaymentCommitment:
+    """Money arrived against a commitment the calendar already ruled MISSED.
+
+    The state does not change — the deadline was missed — but the money is
+    recorded on the commitment so the provenance chain shows it.
+    """
+    if commitment.state is not CommitmentState.MISSED:
+        raise InvalidTransition("late payments are only noted on missed commitments")
+    return commitment.model_copy(update={
+        "amount_received": commitment.amount_received + max(0, amount),
+    })
+
+
+def expire_commitment(
+    commitment: PaymentCommitment, today: date, now: datetime
+) -> PaymentCommitment | None:
+    """The deadline has passed without the committed amount: MISSED."""
+    if not commitment.live or today <= commitment.due_on:
+        return None
+    return commitment.model_copy(update={
+        "state": CommitmentState.MISSED, "missed_at": now, "resolved_at": now,
+    })
+
+
+def cancel_commitment(
+    commitment: PaymentCommitment, now: datetime, reason: str
+) -> PaymentCommitment:
+    if not commitment.live:
+        return commitment
+    return commitment.model_copy(update={
+        "state": CommitmentState.CANCELLED, "resolved_at": now, "cancel_reason": reason,
+    })

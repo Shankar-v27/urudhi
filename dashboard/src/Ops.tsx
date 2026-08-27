@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import {
-  ApiError, Escalation, EvalSummary, HumanAction, OPERATOR_KEY, ReplyEval, api, inr, num, pct,
-  storageGet, storageSet, useLoad, when,
+  ApiError, Escalation, EvalSummary, HumanAction, HumanRequest, OPERATOR_KEY, ReplyEval, api, inr, num,
+  pct, storageGet, storageSet, useLoad, when,
 } from "./api";
 import { BarGroup, COLORS, Empty, HBars, StateChip, Status, Tag } from "./ui";
 
@@ -17,15 +17,62 @@ const ACTIONS: { action: HumanAction; label: string; needsNote: boolean }[] = [
 ];
 
 type Outcome = { ok: boolean; text: string };
+type ActBody = Omit<HumanRequest, "operator">;
+
+/** Rupees typed by an operator → integer paise, or null when it is not a positive amount. */
+function toPaise(rupees: string): number | null {
+  const value = Number(rupees.replace(/,/g, ""));
+  if (!Number.isFinite(value) || value <= 0) return null;
+  const paise = Math.round(value * 100);
+  return paise > 0 ? paise : null;
+}
+
+function credibilityTone(value: number): string {
+  return value >= 0.6 ? "ok" : value < 0.4 ? "bad" : "warn";
+}
+
+function CommitmentContext({ row }: { row: Escalation }) {
+  const last = row.last_commitment;
+  return (
+    <div className="commit-context small">
+      <div className="kv">
+        <Tag tone={credibilityTone(row.credibility)}>credibility {num(row.credibility, 2)}</Tag>
+        <span><span className="muted">fulfilled</span> {num(row.commitments_fulfilled)}</span>
+        <span><span className="muted">missed</span> <span className={row.commitments_missed > 0 ? "neg" : ""}>{num(row.commitments_missed)}</span></span>
+        <Tag tone="warn">recommended action: {row.recommended_action}</Tag>
+      </div>
+      {last ? (
+        <div className="kv">
+          <span className="muted">last commitment</span>
+          <StateChip state={last.state} />
+          <b className="num-inline">{inr(last.committed_amount)}</b>
+          <span><span className="muted">due</span> {last.due_on}</span>
+          <span><span className="muted">received</span> {inr(last.amount_received)}</span>
+          <span className="muted">{last.id}</span>
+        </div>
+      ) : <div className="muted">no commitment has been accepted on this invoice</div>}
+      {last?.evidence && <div className="verbatim">“{last.evidence}”</div>}
+    </div>
+  );
+}
 
 function EscalationRow({
   row, operator, busy, outcome, onAct,
 }: {
   row: Escalation; operator: string; busy: boolean; outcome?: Outcome;
-  onAct: (id: string, action: HumanAction, notes: string) => void;
+  onAct: (id: string, body: ActBody) => void;
 }) {
   const [notes, setNotes] = useState("");
   const [open, setOpen] = useState(false);
+  const [rupees, setRupees] = useState("");
+  const [dueOn, setDueOn] = useState("");
+  const paise = toPaise(rupees);
+  const arrangeReady = Boolean(operator) && Boolean(notes.trim()) && paise !== null && /^\d{4}-\d{2}-\d{2}$/.test(dueOn);
+  const arrangeHint = !operator ? "set an operator name first"
+    : !notes.trim() ? "say what was agreed in the notes"
+    : paise === null ? "amount must be a positive rupee value"
+    : !dueOn ? "pick the deadline" : "";
+  const last = row.last_commitment;
   return (
     <>
       <tr className="row" onClick={() => setOpen((o) => !o)}>
@@ -34,25 +81,39 @@ function EscalationRow({
         <td className="num">{inr(row.balance)}</td>
         <td className="muted">{when(row.since)}</td>
         <td>{row.reason ?? <span className="muted">—</span>}</td>
+        <td className="small">
+          {last ? (
+            <>
+              <StateChip state={last.state} /> <span className="num-inline">{inr(last.committed_amount)}</span>
+              <div className="muted">due {last.due_on} · {inr(last.amount_received)} received</div>
+            </>
+          ) : <span className="muted">none</span>}
+          <div className="kv">
+            <Tag tone={credibilityTone(row.credibility)}>{num(row.credibility, 2)}</Tag>
+            {row.commitments_missed > 0 && <span className="neg">{row.commitments_missed} missed</span>}
+          </div>
+        </td>
         <td>{row.acknowledged ? <Tag tone="ok">acknowledged</Tag> : <Tag>unclaimed</Tag>}</td>
       </tr>
       <tr className="expand">
-        <td colSpan={6}>
+        <td colSpan={7}>
           {row.verbatim && <div className="verbatim">“{row.verbatim}”</div>}
           {open && (
             <div className="actions">
+              <CommitmentContext row={row} />
               {row.human_actions.length > 0 && (
                 <ul className="history small">
                   {row.human_actions.map((h, i) => (
                     <li key={i}>
                       <b>{h.action}</b> · {h.operator} · {when(h.at)}
+                      {h.commitment_id && <span className="muted"> · opened {h.commitment_id}</span>}
                       {h.notes && <span className="muted"> — {h.notes}</span>}
                     </li>
                   ))}
                 </ul>
               )}
               <textarea
-                placeholder="notes (required for note / release / close)"
+                placeholder="notes (required for note / arrange / release / close)"
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 rows={2}
@@ -65,12 +126,35 @@ function EscalationRow({
                     disabled={busy || !operator || (a.needsNote && !notes.trim())}
                     title={!operator ? "set an operator name first" : a.needsNote && !notes.trim() ? "needs a note" : ""}
                     className={a.action === "close" ? "danger" : ""}
-                    onClick={() => onAct(row.invoice_id, a.action, notes)}
+                    onClick={() => onAct(row.invoice_id, { action: a.action, notes })}
                   >
                     {a.label}
                   </button>
                 ))}
                 {busy && <span className="muted small">working…</span>}
+              </div>
+              <div className="arrange">
+                <span className="muted small">
+                  Approve an arrangement: policy checks it, opens a commitment with a tagged payment link, and releases the invoice.
+                </span>
+                <div className="buttons">
+                  <label className="muted small">
+                    ₹{" "}
+                    <input inputMode="decimal" placeholder="amount in rupees" value={rupees}
+                      onChange={(e) => setRupees(e.target.value)} aria-label="arrangement amount in rupees" style={{ width: 150 }} />
+                  </label>
+                  <label className="muted small">
+                    due{" "}
+                    <input type="date" value={dueOn} onChange={(e) => setDueOn(e.target.value)} aria-label="arrangement due date" />
+                  </label>
+                  <button
+                    disabled={busy || !arrangeReady}
+                    title={arrangeHint}
+                    onClick={() => paise !== null && onAct(row.invoice_id, { action: "arrange", notes, amount: paise, due_on: dueOn })}
+                  >
+                    Approve arrangement{paise !== null ? ` · ${inr(paise)}` : ""}
+                  </button>
+                </div>
               </div>
               {outcome && <div className={`note ${outcome.ok ? "ok" : "bad"}`}>{outcome.text}</div>}
             </div>
@@ -92,16 +176,17 @@ export function Escalations() {
     storageSet(OPERATOR_KEY, value.trim());
   };
 
-  const act = async (id: string, action: HumanAction, notes: string) => {
+  const act = async (id: string, body: ActBody) => {
     setBusy(id);
     try {
-      const result = await api.human(id, { action, operator: operator.trim(), notes });
+      const result = await api.human(id, { ...body, operator: operator.trim() });
       const moved = result.from_state !== result.to_state ? ` (${result.from_state} → ${result.to_state})` : "";
-      setOutcomes((o) => ({ ...o, [id]: { ok: true, text: `${result.action} recorded by ${result.operator}${moved}` } }));
+      const opened = result.commitment_id ? ` · commitment ${result.commitment_id} opened` : "";
+      setOutcomes((o) => ({ ...o, [id]: { ok: true, text: `${result.action} recorded by ${result.operator}${moved}${opened}` } }));
       queue.reload();
     } catch (failure) {
       const text = failure instanceof ApiError
-        ? `${failure.status}${failure.status === 409 ? " — not allowed" : ""}: ${failure.detail}`
+        ? `${failure.status}${failure.status === 409 ? " — policy refused" : ""}: ${failure.detail}`
         : String(failure);
       setOutcomes((o) => ({ ...o, [id]: { ok: false, text } }));
     } finally {
@@ -117,7 +202,7 @@ export function Escalations() {
           <input value={operator} onChange={(e) => setOperator(e.target.value)} placeholder="your name" maxLength={80} />
         </label>
         <button onClick={queue.reload}>refresh</button>
-        <span className="muted small">Click a row for actions. Release and close require a note; the audit chain records every action.</span>
+        <span className="muted small">Click a row for actions. Arrange, release and close require a note; the audit chain records every action.</span>
       </div>
       <Status load={queue}>
         {(rows) => rows.length === 0 ? <Empty>nothing is waiting on a human</Empty> : (
@@ -130,6 +215,7 @@ export function Escalations() {
                   <th className="num">Balance</th>
                   <th>Since</th>
                   <th>Reason</th>
+                  <th>Commitment record</th>
                   <th>Owner</th>
                 </tr>
               </thead>

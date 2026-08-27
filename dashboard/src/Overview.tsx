@@ -2,7 +2,8 @@
 
 import { ReactNode } from "react";
 import {
-  ArmMetrics, ArmName, Experiment, Loaded, Summary, api, inr, inrShort, inrSigned, num, pct, useLoad,
+  ArmCommitments, ArmMetrics, ArmName, AttributionMethod, CommitmentSummary, Experiment, Loaded, Summary,
+  api, inr, inrShort, inrSigned, num, pct, useLoad,
 } from "./api";
 import { BarGroup, COLORS, HBars, LineChart, Status, Tag, Tile } from "./ui";
 
@@ -19,6 +20,29 @@ function Tiles({ summary }: { summary: Summary }) {
       <Tile label="Recovery rate" value={pct(rate)} sub={`${num(summary.messages_sent)} messages sent`} />
       <Tile label="Brain · transport" value={<span className="mode">{summary.brain} · {summary.transport}</span>} />
     </div>
+  );
+}
+
+const money0 = (v: number | null | undefined) => (v === null || v === undefined ? "—" : inr(v));
+
+function CommitmentTiles({ c }: { c: CommitmentSummary }) {
+  const resolved = c.fulfilled + c.missed;
+  return (
+    <section>
+      <h2>Commitments — accepted, instrumented, verified on rails <Tag>observed</Tag></h2>
+      <div className="tiles">
+        <Tile label="Commitments created" value={num(c.created)}
+          sub={`${num(c.active)} active · ${num(c.partially_fulfilled)} partial · ${num(c.cancelled)} cancelled`} />
+        <Tile label="Fulfilment rate" value={pct(c.fulfillment_rate)}
+          sub={resolved > 0 ? `${num(c.fulfilled)} of ${num(resolved)} resolved · ${num(c.missed)} missed` : "nothing resolved yet"} />
+        <Tile label="₹ recovered per commitment" value={money0(c.recovered_per_commitment_paise)}
+          sub={c.conversion !== null ? `${pct(c.conversion, 0)} of commitments saw money` : "no commitments"} />
+        <Tile label="₹ recovered per contact attempt" value={money0(c.recovered_per_attempt_paise)}
+          sub={c.average_delay_days !== null ? `avg delay ${num(c.average_delay_days, 1)} d on fulfilled` : "no fulfilled commitments"} />
+        <Tile label="Exact-matched on instrument" value={inr(c.exact_instrument_matched_paise)}
+          sub={`${inr(c.amount_received_paise)} received of ${inr(c.amount_committed_paise)} committed`} />
+      </div>
+    </section>
   );
 }
 
@@ -43,6 +67,7 @@ function RecoveryTimeline() {
 }
 
 type Row = { key: keyof ArmMetrics; label: string; format: (v: number | null) => string };
+type CommitmentRow = { label: string; value: (c: ArmCommitments) => string };
 const money = (v: number | null) => (v === null ? "—" : inr(v));
 const count = (v: number | null) => num(v);
 const rate = (v: number | null) => pct(v);
@@ -64,11 +89,118 @@ const METRIC_ROWS: Row[] = [
   { key: "disputes", label: "Disputes", format: count },
   { key: "stop_contacts", label: "Stop-contact requests", format: count },
   { key: "contact_attempts", label: "Contact attempts", format: count },
+  { key: "recovered_per_contact_attempt_paise", label: "₹ recovered per contact attempt", format: money },
   { key: "offers_made", label: "Offers made", format: count },
   { key: "offers_accepted", label: "Offers accepted", format: count },
   { key: "days_to_recovery_median", label: "Days to recovery (median)", format: days },
   { key: "days_to_recovery_mean", label: "Days to recovery (mean)", format: days },
 ];
+
+const COMMITMENT_ROWS: CommitmentRow[] = [
+  { label: "Commitments created", value: (c) => num(c.created) },
+  { label: "  from promises / concessions / installments / human",
+    value: (c) => ["promise", "concession", "installment", "human"].map((k) => num(c.by_source[k] ?? 0)).join(" / ") },
+  { label: "Instruments issued", value: (c) => num(c.instruments_issued) },
+  { label: "Fulfilled (on time)", value: (c) => `${num(c.fulfilled)} (${num(c.fulfilled_on_time)})` },
+  { label: "Partially fulfilled", value: (c) => num(c.partially_fulfilled) },
+  { label: "Missed", value: (c) => num(c.missed) },
+  { label: "Cancelled", value: (c) => num(c.cancelled) },
+  { label: "Active at end", value: (c) => num(c.active_at_end) },
+  { label: "Fulfilment rate", value: (c) => pct(c.fulfillment_rate) },
+  { label: "Commitment → payment conversion", value: (c) => pct(c.commitment_to_payment_conversion) },
+  { label: "Median days commitment → payment", value: (c) => days(c.median_days_commitment_to_payment) },
+  { label: "Average delay on fulfilled", value: (c) => days(c.average_delay_days) },
+  { label: "Amount committed", value: (c) => inr(c.amount_committed_paise) },
+  { label: "Amount fulfilled", value: (c) => inr(c.amount_fulfilled_paise) },
+  { label: "₹ recovered / commitment", value: (c) => money0(c.recovered_per_commitment_paise) },
+  { label: "₹ recovered / contact attempt", value: (c) => money0(c.recovered_per_contact_attempt_paise) },
+  { label: "Exact-matched payments (₹)", value: (c) => `${num(c.exact_matched_payments)} (${inr(c.exact_matched_paise)})` },
+];
+
+const METHODS: AttributionMethod[] = ["exact", "window", "unattributed"];
+const METHOD_COLOR: Record<AttributionMethod, string> = {
+  exact: COLORS.green, window: COLORS.blue, unattributed: COLORS.muted,
+};
+
+function CommitmentComparison({ x, arms }: { x: Experiment; arms: ArmName[] }) {
+  const withData = arms.filter((a) => x.arms[a].commitments);
+  if (withData.length === 0) {
+    return (
+      <p className="muted">
+        This report predates the commitment engine — no per-arm commitment metrics were written. Re-run{" "}
+        <code>python -m urudhi.sim --arms all</code> to measure them.
+      </p>
+    );
+  }
+  const bars: BarGroup[] = withData.map((a) => {
+    const c = x.arms[a].commitments!;
+    return {
+      label: x.arms[a].label,
+      bars: [
+        { label: "₹ / commitment", value: c.recovered_per_commitment_paise ?? 0, color: COLORS.green,
+          note: c.created === 0 ? "no commitments in this arm" : `${num(c.created)} created` },
+        { label: "₹ / contact attempt", value: c.recovered_per_contact_attempt_paise ?? 0, color: COLORS.blue,
+          note: pct(c.fulfillment_rate) === "—" ? "no fulfilment rate" : `fulfilment ${pct(c.fulfillment_rate, 0)}` },
+      ],
+    };
+  });
+  return (
+    <>
+      <p className="muted small">
+        Only the Urudhi arm runs the commitment engine; the no-action and baseline arms never create
+        commitments, so their zeros are real, not missing data.
+      </p>
+      <div className="scroll">
+        <table className="compact">
+          <thead>
+            <tr>
+              <th>Metric</th>
+              {withData.map((a) => <th key={a} className="num">{x.arms[a].label}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {COMMITMENT_ROWS.map((row) => (
+              <tr key={row.label}>
+                <td>{row.label}</td>
+                {withData.map((a) => {
+                  const c = x.arms[a].commitments!;
+                  return <td key={a} className="num">{c.created === 0 && row.label !== "Commitments created" ? <span className="muted">— (0 commitments)</span> : row.value(c)}</td>;
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <HBars title="Recovered per commitment and per contact attempt, by arm" groups={bars} format={inrShort} />
+    </>
+  );
+}
+
+function AttributionByMethod({ x, arms }: { x: Experiment; arms: ("urudhi" | "baseline")[] }) {
+  const withMethod = arms.filter((a) => x.attribution.arms[a]?.by_method);
+  if (withMethod.length === 0) {
+    return <p className="muted small">No attribution-by-method breakdown in this report (it predates exact instrument matching).</p>;
+  }
+  const groups: BarGroup[] = withMethod.map((a) => {
+    const m = x.attribution.arms[a]!.by_method!;
+    return {
+      label: x.arms[a].label,
+      bars: METHODS.map((k) => ({
+        label: k, value: m[k].paise, color: METHOD_COLOR[k], note: `${num(m[k].payments)} payments`,
+      })),
+    };
+  });
+  return (
+    <>
+      <p className="muted small">
+        <b>exact</b> = the payment came through the Razorpay link tagged with a commitment id;{" "}
+        <b>window</b> = attributed to the last message within {x.attribution.window_days} days;{" "}
+        <b>unattributed</b> = no intervention can claim it.
+      </p>
+      <HBars title="Attributed paise by matching method, per arm" groups={groups} format={inrShort} />
+    </>
+  );
+}
 
 function metric(arm: ArmMetrics, row: Row): string {
   const value = arm[row.key];
@@ -156,6 +288,9 @@ function ArmComparison({ x }: { x: Experiment }) {
         </table>
       </div>
 
+      <h3>Commitment engine, by arm</h3>
+      <CommitmentComparison x={x} arms={arms} />
+
       <h3>Days to recovery</h3>
       <div className="tiles">
         {arms.map((a) => {
@@ -195,6 +330,9 @@ function ArmComparison({ x }: { x: Experiment }) {
           );
         })}
       </div>
+
+      <h3>Attribution by matching method</h3>
+      <AttributionByMethod x={x} arms={attributionArms} />
 
       <h3>Policy sensitivity</h3>
       {x.sensitivity.length === 0 ? <p className="muted">no sensitivity sweep in this report</p> : (
@@ -251,6 +389,7 @@ export function Overview({ summary }: { summary: Loaded<Summary> }) {
   return (
     <>
       <Status load={summary}>{(s) => <Tiles summary={s} />}</Status>
+      <Status load={summary}>{(s) => <CommitmentTiles c={s.commitments} />}</Status>
       <RecoveryTimeline />
       <section>
         <Status load={experiment} notFound={runNote}>{(x) => <ArmComparison x={x} />}</Status>

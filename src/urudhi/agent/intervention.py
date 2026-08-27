@@ -29,14 +29,23 @@ class InterventionKind(enum.StrEnum):
     INSTALLMENT_OFFER = "installment_offer"  # dated schedule (policy-capped)
     WAIT_FOR_PROMISE = "wait_for_promise"  # a promise / plan is running; don't chase over it
     ESCALATE_HUMAN = "escalate_human"      # hand to a person now
+    COMMITMENT_CONFIRMATION = "commitment_confirmation"  # "here is the link for what you agreed"
+    COMMITMENT_REMINDER = "commitment_reminder"          # bounded nudge just before a deadline
 
 
 # Interventions that put words in front of the debtor.
 CONTACTING = frozenset({
     InterventionKind.REMINDER, InterventionKind.PAYMENT_LINK,
     InterventionKind.REQUEST_PROMISE, InterventionKind.DISCOUNT_OFFER,
-    InterventionKind.INSTALLMENT_OFFER,
+    InterventionKind.INSTALLMENT_OFFER, InterventionKind.COMMITMENT_CONFIRMATION,
+    InterventionKind.COMMITMENT_REMINDER,
 })
+
+# Interventions the brain may *propose*; the two commitment kinds are issued by the
+# loop itself around a commitment's lifecycle, never chosen by the model.
+PROPOSABLE = frozenset(InterventionKind) - {
+    InterventionKind.COMMITMENT_CONFIRMATION, InterventionKind.COMMITMENT_REMINDER,
+}
 
 
 class PriorIntervention(BaseModel):
@@ -68,6 +77,14 @@ class DecisionContext(BaseModel):
     promises_partially_kept: int = 0
     open_promise_amount: Paise | None = None
     open_promise_on: date | None = None
+    # Commitment record — what this debtor has actually done with accepted arrangements.
+    commitments_total: int = 0
+    commitments_fulfilled: int = 0
+    commitments_partially_fulfilled: int = 0
+    commitments_missed: int = 0
+    commitment_fulfillment_rate: float | None = None
+    commitment_average_delay_days: float | None = None
+    active_commitment: str | None = None    # "₹50,000 by 2026-08-28 via payment link"
     last_intent: str | None = None          # typed intent of the most recent reply
     last_reply_summary: str = ""            # the brain's own one-line summary of it
     live_concession: str | None = None      # "discount 3% by 2026-09-01" etc.

@@ -2,7 +2,11 @@
 
 > Track 03 · AI Revenue Recovery — Razorpay AI Buildathon
 > An agent that recovers overdue B2B invoices with bounded authority,
-> a promise-to-pay ledger, and recovery measured on payment rails.
+> an **executable promise-to-pay commitment engine**, and recovery measured
+> on payment rails.
+
+> **Promise** = what the debtor said · **Commitment** = what Urudhi accepted ·
+> **Payment** = what Razorpay verified. The three never collapse into one.
 
 ## The one-diagram version
 
@@ -72,6 +76,95 @@ are acknowledged with 200 so Razorpay does not retry what retrying cannot
 fix. Recovered ₹ is, by construction, the sum of rail events. Even the
 simulator's synthetic payments enter through this path.
 
+## Executable Promise-to-Pay — the commitment engine
+
+Urudhi does not merely remember what a debtor promised. It converts a
+debtor's natural-language promise into a **policy-bounded payment
+commitment**: an exact amount, an exact deadline, and a Razorpay Payment
+Link issued for that amount, tagged with the commitment id and expiring at
+the deadline. Recovery is recognised only when the corresponding payment is
+observed through the webhook pipeline and matched to the commitment.
+Commitment outcomes — fulfilled, partially fulfilled, missed — feed
+credibility, prioritisation, the brain's next proposal, and escalation.
+
+```
+                  DEBTOR LANGUAGE
+                        │  "Cash konjam tight ah iruku. Friday 50k kudukuren, balance next month."
+                        ▼
+                    CLAUDE (or mock)          interpret → ReplyInterpretation
+                        │                     {promise, ₹50,000, 2026-08-28, 0.94}
+                        ▼
+                 PROMISE-TO-PAY               PromiseToPay — what was SAID, verbatim, scored
+                        │                     (always recorded; evidence never discarded)
+                        ▼
+               POLICY VALIDATION              check_commitment: invoice active · no dispute ·
+                        │                     not stop-contact · amount > 0 · ≤ balance ·
+                        │                     partial allowed · ≥ floor · deadline not past ·
+                        │                     ≤ horizon · consistent with an accepted offer
+             ┌──────────┴──────────┐
+        APPROVED                REFUSED       → promise DECLINED (kept as evidence),
+             │                                  COMMITMENT_BLOCKED audited with every check,
+             ▼                                  invoice stays chaseable
+       EXECUTABLE COMMITMENT                  PaymentCommitment ACTIVE — ₹50,000 by 28 Aug 23:59 IST
+             │                                (supersedes any live commitment on the invoice)
+             ▼
+       RAZORPAY PAYMENT LINK                  amount = ₹50,000 · reference_id = cmt_… ·
+             │                                notes = {invoice_id, commitment_id} · expire_by = deadline
+             │                                → confirmation sent to the debtor (an answer, not a nudge)
+             ▼
+         PAYMENT WEBHOOK                      signature verified · replay-safe · currency/amount validated
+             │                                → invoice resolved → commitment resolved (exact: the
+             │                                instrument carried the id; else earliest live commitment)
+             ▼
+       COMMITMENT OUTCOME
+    ┌─────────┴─────────┐
+FULFILLED / PARTIAL    MISSED (deadline passed; ruled by the daily tick, never by a claim)
+    │                    │
+    ▼                    ▼
+CREDIT CREDIBILITY    RE-PLAN / ESCALATE  (2 missed → human; a person may approve a new
+    │                                      arrangement, which is itself policy-checked)
+    ▼
+NEXT STRATEGY         priority score · DecisionContext for the brain · reminder cadence
+```
+
+Commitment states: `ACTIVE → PARTIALLY_FULFILLED → FULFILLED` (rail money,
+with `days_late` when it arrives after the deadline but before the tick
+rules), `→ MISSED` (calendar), `→ CANCELLED` (stop-contact, dispute,
+escalation, human close), `→ SUPERSEDED` (a newer commitment replaced it).
+Money against a MISSED commitment is recorded on the invoice and noted on the
+commitment; the miss stands. Money against a cancelled or superseded
+commitment's link is recorded on the invoice only (`matched_by =
+instrument-stale`).
+
+Sources: `promise` (interpreted words), `concession` (acceptance of a
+policy-approved discount → a commitment for the settlement amount; the
+discount is waived only when that commitment is fulfilled), `installment`
+(one commitment per installment of an accepted plan, each with its own link
+and deadline; a missed installment breaks the plan), `human` (an arrangement
+a person approved after escalation — still run through `check_commitment`).
+
+Around a commitment the loop sends at most two messages: a **confirmation**
+when it is created (responding mode — it answers the debtor's own words, so
+it burns no attempt) and **one bounded reminder** the day before the
+deadline (a normal nudge, fully gated by contact hours, spacing and the
+attempt cap; `commitment_reminder_days_before`). While a commitment is live
+the agent does not chase.
+
+Attribution has a hierarchy: a payment whose instrument carried the
+commitment id is **exactly** attributed (provenance, not inference); otherwise
+the 7-day window rule applies (an accounting rule); otherwise it is
+unattributed. The experiment report keeps the three apart.
+
+Every lifecycle step is a link in the audit chain: `COMMITMENT_PROPOSED`,
+`COMMITMENT_APPROVED` / `COMMITMENT_BLOCKED` (with the full checklist),
+`COMMITMENT_CREATED`, `PAYMENT_INSTRUMENT_CREATED`,
+`COMMITMENT_PARTIALLY_FULFILLED`, `COMMITMENT_FULFILLED`,
+`COMMITMENT_MISSED`, `COMMITMENT_CANCELLED`, `COMMITMENT_SUPERSEDED`. The
+dashboard's **Commitment integrity** view reconstructs the chain for each
+commitment — what was said, what the AI understood, what policy allowed,
+what instrument was created, what money arrived, the final outcome — each
+step pointing at its audit event.
+
 ## The promise-to-pay ledger, and concessions
 
 Every commitment a debtor makes is a typed, dated, confidence-scored
@@ -97,12 +190,15 @@ a 3% discount and pays 97% is settled; the 3% is recorded as discount cost,
 not chased. Paying the discounted amount late clears nothing extra; paying
 the full balance despite an offer waives nothing.
 
-Kept/broken history feeds chase prioritisation (`scoring/priority.py`: value,
+Commitment history feeds chase prioritisation (`scoring/priority.py`: value,
 urgency, credibility, fatigue — an explainable weighted sum whose breakdown
-is shown in the dashboard's "Why this action?") and escalation: two broken
-promises (or a broken installment plan plus a broken promise) hand the
-invoice to a human. While a promise or plan is running the agent does not
-chase — a given word gets its window.
+is shown in the dashboard's "Why this action?"). Credibility is derived from
+the commitment record (`ledger/commitments.py`: fulfilled / missed /
+partial, fulfilment rate, average delay, a Laplace-smoothed belief that the
+next commitment is kept): missed commitments push the chase score up,
+fulfilled ones pull it down, a live commitment suppresses chasing entirely.
+Escalation: two broken promises / missed commitments (or a broken installment
+plan plus a broken promise) hand the invoice to a human.
 
 ## Compliance posture
 
@@ -174,7 +270,8 @@ place the LLM is used: the language boundary.
 | `POST /webhooks/razorpay` | signed rail events; the only write path for money |
 | `POST /inbound/email`, `/inbound/reply` | debtor replies into the brain (bearer token) |
 | `POST /api/run/tick` | one scheduler tick: expire commitments, chase by priority |
-| `GET /api/*` | ledger, promises, concessions, escalations, explain, audit, timeline, experiment, reply-eval — bearer token, contact details masked |
+| `GET /api/*` | ledger, promises, commitments (+ per-invoice integrity chains), concessions, escalations, explain, audit, timeline, experiment, reply-eval — bearer token, contact details masked |
+| `POST /api/invoices/{id}/human` | acknowledge · note · **arrange** (amount + due date → policy-checked commitment) · release · close |
 | `GET /health` | brain / transport / rails mode, chain status, counters |
 
 Email is the one real channel: `sandbox` writes RFC-822 `.eml` files locally
@@ -186,14 +283,15 @@ server. No other channel is pretended.
 | Path | Responsibility |
 |---|---|
 | `ledger/money.py` | integer-paise money, Indian-format INR |
-| `ledger/models.py` | Debtor, Invoice, PromiseToPay, Concession, Payment |
-| `ledger/transitions.py` | pure state transitions; all domain rules incl. settlement |
+| `ledger/models.py` | Debtor, Invoice, PromiseToPay, Concession, PaymentCommitment, Payment |
+| `ledger/transitions.py` | pure state transitions; all domain rules incl. settlement and commitments |
+| `ledger/commitments.py` | commitment profile → credibility, reasons |
 | `agent/intervention.py` | intervention kinds, DecisionContext, recommendations |
-| `agent/policy.py` | PolicyConfig, gates, `decide_intervention` |
+| `agent/policy.py` | PolicyConfig, gates, `decide_intervention`, `check_commitment` |
 | `agent/brain.py` | Claude (any base URL) + deterministic mock; sanitisation |
 | `agent/loop.py` | RecoveryAgent orchestration; claims, sends, audits |
-| `agent/human.py` | human-in-the-loop actions and the escalation queue |
-| `agent/explain.py` | "Why this action?" evidence for the dashboard |
+| `agent/human.py` | human-in-the-loop actions (incl. approving an arrangement) and the queue |
+| `agent/explain.py` | "Why this action?" and commitment-integrity provenance |
 | `scoring/priority.py` | explainable chase prioritisation |
 | `audit/log.py` | hash-chained events, chain verification |
 | `store.py` | SQLite; append-only audit; outbound claims; webhook ledger |

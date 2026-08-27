@@ -30,6 +30,7 @@ from typing import Any, Protocol
 from pydantic import BaseModel, Field, ValidationError
 
 from urudhi.agent.intervention import (
+    PROPOSABLE,
     DecisionContext,
     InterventionKind,
     InterventionRecommendation,
@@ -428,6 +429,10 @@ class MockBrain:
             lines.append(context.history_summary)
         if context.purpose == "request_promise":
             lines.append("Could you confirm the amount and the date you will pay by?")
+        if context.purpose == "commitment_confirmation":
+            lines.append("Thank you for confirming.")
+        if context.purpose == "commitment_reminder":
+            lines.append("Just a reminder ahead of the date you gave us.")
         if context.approved_offer_text:
             lines.append(context.approved_offer_text)
         if context.payment_url:
@@ -484,8 +489,13 @@ installment_offer|wait_for_promise|escalate_human",
  "proposed_discount_bps": int|null, "proposed_installments": int|null,
  "proposed_pay_by": "YYYY-MM-DD"|null, "confidence": 0.0-1.0}
 
+The facts include the debtor's *commitment record* (commitments_fulfilled /
+missed, fulfillment rate, average delay, active_commitment): a debtor whose
+accepted arrangements were honoured deserves patience and plain reminders; one
+who missed commitments needs firmer, more specific asks or escalation.
+
 Guidance:
-- An open promise or running installment plan → wait_for_promise.
+- An open promise, running installment plan or active_commitment → wait_for_promise.
 - First contact, or a debtor who has simply gone quiet → reminder / payment_link.
 - Vague replies or one broken promise → request_promise (ask for amount + date).
 - A debtor who asked for terms: discount_offer when the balance is small or the
@@ -503,9 +513,13 @@ You draft one short, courteous B2B payment message for an Indian business
 context. Firm about the facts, respectful in tone, no threats, no legal
 language, no emojis. Include: invoice number, balance, days overdue; the
 history line if provided (state it plainly, without blame); if purpose is
-"request_promise", ask for a specific amount and date; the offer text
-verbatim if provided; the payment link if provided; one line inviting the
-debtor to flag any error; and a STOP opt-out line. Write in the debtor's
+"request_promise", ask for a specific amount and date; if purpose is
+"commitment_confirmation", thank them and restate exactly what they agreed
+(the offer text) with the payment link — no new asks; if purpose is
+"commitment_reminder", a one-line courteous reminder of the agreed amount and
+date with the link; the offer text verbatim if provided; the payment link if
+provided; one line inviting the debtor to flag any error; and a STOP opt-out
+line. Write in the debtor's
 language ("ta" = Tamil in Tamil script is fine, or Tanglish; "hi" = Hindi or
 Hinglish; else English). Return only the message text."""
 
@@ -611,6 +625,8 @@ class ClaudeBrain:
         try:
             data = _extract_json(raw)
             action = InterventionKind(str(data.get("action", "")).strip().lower())
+            if action not in PROPOSABLE:
+                raise ValueError(f"{action} is issued by the loop, not proposed")
             rationale = data.get("rationale") or []
             if isinstance(rationale, str):
                 rationale = [rationale]

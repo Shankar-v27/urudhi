@@ -10,10 +10,12 @@ Components (each normalized to [0, 1]):
 * ``value``     — balance at stake, log-scaled so one lakh doesn't drown
                   twenty small invoices worth two.
 * ``urgency``   — days overdue, saturating at 180 days.
-* ``credibility`` — the debtor's promise record: broken promises push urgency
-                  up (act now, words aren't working); a debtor currently
-                  holding an open promise scores near zero (let the promise
-                  run — chasing mid-promise burns goodwill).
+* ``credibility`` — the debtor's commitment record: missed commitments and
+                  broken promises push urgency up (act now, words aren't
+                  working); fulfilled commitments pull it down (their word
+                  has been good); a debtor currently holding a live
+                  commitment or open promise scores near zero (let it run —
+                  chasing mid-commitment burns goodwill).
 * ``fatigue``   — attempts already spent, discounting invoices the agent has
                   hammered without result.
 """
@@ -25,7 +27,8 @@ from datetime import date
 
 from pydantic import BaseModel, Field
 
-from urudhi.ledger.models import Invoice, PromiseState, PromiseToPay
+from urudhi.ledger.commitments import profile_for
+from urudhi.ledger.models import Invoice, PaymentCommitment, PromiseState, PromiseToPay
 from urudhi.ledger.money import PAISE_PER_RUPEE
 
 # Component weights; kept as data so the config ships with published results.
@@ -56,12 +59,25 @@ def _urgency_component(days_overdue: int) -> float:
     return min(1.0, max(days_overdue, 0) / _URGENCY_SATURATION_DAYS)
 
 
-def _credibility_component(promises: list[PromiseToPay]) -> float:
-    """0 = leave alone (open promise running), 1 = words have stopped working."""
+def _credibility_component(promises: list[PromiseToPay],
+                           commitments: list[PaymentCommitment] | None = None) -> float:
+    """0 = leave alone (a commitment is running), 1 = words have stopped working.
+
+    With commitment history the record of *accepted arrangements* drives the
+    number: each missed commitment adds 0.25, each fulfilled one subtracts
+    0.15 (floored so a perfect record still gets a routine 0.2). Without any
+    commitments the older promise-only rule applies.
+    """
     if any(p.state is PromiseState.OPEN for p in promises):
         return 0.05
-    broken = sum(1 for p in promises if p.state is PromiseState.BROKEN)
+    if commitments and any(c.live for c in commitments):
+        return 0.05
     partly = sum(1 for p in promises if p.state is PromiseState.PARTIALLY_KEPT)
+    profile = profile_for(commitments or [])
+    if profile.fulfilled or profile.missed:
+        score = 0.5 + 0.25 * profile.missed - 0.15 * profile.fulfilled + 0.10 * partly
+        return round(min(1.0, max(0.2, score)), 4)
+    broken = sum(1 for p in promises if p.state is PromiseState.BROKEN)
     if broken == 0 and partly == 0:
         return 0.5  # no history either way
     return min(1.0, 0.5 + 0.25 * broken + 0.10 * partly)
@@ -80,11 +96,12 @@ def score_invoice(
     attempts: int,
     max_attempts: int,
     today: date,
+    commitments: list[PaymentCommitment] | None = None,
 ) -> PriorityScore:
     components = {
         "value": _value_component(invoice.balance),
         "urgency": _urgency_component(invoice.days_overdue(today)),
-        "credibility": _credibility_component(promises),
+        "credibility": _credibility_component(promises, commitments),
         "fatigue": _fatigue_component(attempts, max_attempts),
     }
     score = sum(WEIGHTS[name] * value for name, value in components.items())

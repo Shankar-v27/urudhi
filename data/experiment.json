@@ -11,6 +11,9 @@
     "max_promise_horizon_days": 30,
     "min_discount_days_overdue": 14,
     "min_installment_balance": 500000,
+    "allow_partial_commitments": true,
+    "min_commitment": 10000,
+    "commitment_reminder_days_before": 1,
     "timezone": "Asia/Kolkata",
     "contact_open": "10:00:00",
     "contact_close": "19:00:00",
@@ -20,8 +23,8 @@
     "escalate_after_broken_promises": 2,
     "recommended_escalation_min_broken": 1,
     "allowed_channels": [
-      "whatsapp",
-      "email"
+      "email",
+      "whatsapp"
     ]
   },
   "arms": {
@@ -45,6 +48,7 @@
       "disputes": 0,
       "stop_contacts": 0,
       "contact_attempts": 0,
+      "messages_total": 0,
       "replies_received": 0,
       "offers_made": 0,
       "offers_accepted": 0,
@@ -62,7 +66,36 @@
         "15-21": 3,
         "22+": 0
       },
-      "audit_events": 23
+      "audit_events": 23,
+      "recovered_per_contact_attempt_paise": null,
+      "recovered_per_message_paise": null,
+      "commitments": {
+        "created": 0,
+        "by_source": {
+          "promise": 0,
+          "concession": 0,
+          "installment": 0,
+          "human": 0
+        },
+        "accepted": 0,
+        "fulfilled": 0,
+        "fulfilled_on_time": 0,
+        "partially_fulfilled": 0,
+        "missed": 0,
+        "cancelled": 0,
+        "active_at_end": 0,
+        "fulfillment_rate": null,
+        "amount_committed_paise": 0,
+        "amount_fulfilled_paise": 0,
+        "commitment_to_payment_conversion": null,
+        "median_days_commitment_to_payment": null,
+        "average_delay_days": null,
+        "recovered_per_commitment_paise": null,
+        "recovered_per_contact_attempt_paise": null,
+        "instruments_issued": 0,
+        "exact_matched_payments": 0,
+        "exact_matched_paise": 0
+      }
     },
     "baseline": {
       "label": "Fixed-cadence baseline",
@@ -70,11 +103,11 @@
       "brain": "none",
       "invoices": 120,
       "amount_at_risk_paise": 1906630000,
-      "recovered_paise": 1238008300,
-      "recovery_rate": 0.6493,
+      "recovered_paise": 1229586400,
+      "recovery_rate": 0.6449,
       "discount_cost_paise": 0,
-      "net_recovered_paise": 1238008300,
-      "invoices_paid": 70,
+      "net_recovered_paise": 1229586400,
+      "invoices_paid": 75,
       "promises_made": 0,
       "promises_kept": 0,
       "promises_broken": 0,
@@ -82,9 +115,10 @@
       "promise_kept_rate": null,
       "escalations": 0,
       "disputes": 0,
-      "stop_contacts": 7,
-      "contact_attempts": 408,
-      "replies_received": 307,
+      "stop_contacts": 5,
+      "contact_attempts": 413,
+      "messages_total": 413,
+      "replies_received": 310,
       "offers_made": 0,
       "offers_accepted": 0,
       "offers_settled": 0,
@@ -92,16 +126,45 @@
       "gates_blocked": 0,
       "proposals_modified": 0,
       "brain_deferrals": 0,
-      "days_to_recovery_median": 3.0,
-      "days_to_recovery_mean": 4.21,
+      "days_to_recovery_median": 3,
+      "days_to_recovery_mean": 5.16,
       "days_to_recovery_histogram": {
-        "0-3": 45,
-        "4-7": 12,
-        "8-14": 12,
-        "15-21": 1,
+        "0-3": 42,
+        "4-7": 13,
+        "8-14": 16,
+        "15-21": 4,
         "22+": 0
       },
-      "audit_events": 840
+      "audit_events": 847,
+      "recovered_per_contact_attempt_paise": 2977206,
+      "recovered_per_message_paise": 2977206,
+      "commitments": {
+        "created": 0,
+        "by_source": {
+          "promise": 0,
+          "concession": 0,
+          "installment": 0,
+          "human": 0
+        },
+        "accepted": 0,
+        "fulfilled": 0,
+        "fulfilled_on_time": 0,
+        "partially_fulfilled": 0,
+        "missed": 0,
+        "cancelled": 0,
+        "active_at_end": 0,
+        "fulfillment_rate": null,
+        "amount_committed_paise": 0,
+        "amount_fulfilled_paise": 0,
+        "commitment_to_payment_conversion": null,
+        "median_days_commitment_to_payment": null,
+        "average_delay_days": null,
+        "recovered_per_commitment_paise": null,
+        "recovered_per_contact_attempt_paise": 2977206,
+        "instruments_issued": 0,
+        "exact_matched_payments": 0,
+        "exact_matched_paise": 0
+      }
     },
     "urudhi": {
       "label": "Urudhi (mock brain)",
@@ -109,56 +172,100 @@
       "brain": "mock",
       "invoices": 120,
       "amount_at_risk_paise": 1906630000,
-      "recovered_paise": 1345289497,
-      "recovery_rate": 0.7056,
-      "discount_cost_paise": 98535,
-      "net_recovered_paise": 1345190962,
-      "invoices_paid": 73,
-      "promises_made": 128,
-      "promises_kept": 84,
-      "promises_broken": 42,
-      "promises_partially_kept": 1,
-      "promise_kept_rate": 0.6614,
-      "escalations": 23,
+      "recovered_paise": 1302880514,
+      "recovery_rate": 0.6833,
+      "discount_cost_paise": 63000,
+      "net_recovered_paise": 1302817514,
+      "invoices_paid": 70,
+      "promises_made": 132,
+      "promises_kept": 92,
+      "promises_broken": 33,
+      "promises_partially_kept": 6,
+      "promise_kept_rate": 0.7023,
+      "escalations": 24,
       "disputes": 9,
       "stop_contacts": 7,
-      "contact_attempts": 302,
-      "replies_received": 221,
-      "offers_made": 25,
-      "offers_accepted": 10,
-      "offers_settled": 6,
+      "contact_attempts": 317,
+      "messages_total": 486,
+      "replies_received": 222,
+      "offers_made": 23,
+      "offers_accepted": 8,
+      "offers_settled": 3,
       "offers_expired": 4,
-      "gates_blocked": 157,
+      "gates_blocked": 234,
       "proposals_modified": 0,
       "brain_deferrals": 0,
-      "days_to_recovery_median": 3,
-      "days_to_recovery_mean": 4.78,
+      "days_to_recovery_median": 3.0,
+      "days_to_recovery_mean": 4.11,
       "days_to_recovery_histogram": {
-        "0-3": 41,
-        "4-7": 17,
+        "0-3": 46,
+        "4-7": 10,
         "8-14": 13,
-        "15-21": 2,
+        "15-21": 1,
         "22+": 0
       },
-      "audit_events": 2373
+      "audit_events": 3648,
+      "recovered_per_contact_attempt_paise": 4110033,
+      "recovered_per_message_paise": 2680824,
+      "commitments": {
+        "created": 153,
+        "by_source": {
+          "promise": 127,
+          "concession": 5,
+          "installment": 21,
+          "human": 0
+        },
+        "accepted": 132,
+        "fulfilled": 99,
+        "fulfilled_on_time": 99,
+        "partially_fulfilled": 2,
+        "missed": 41,
+        "cancelled": 0,
+        "active_at_end": 11,
+        "fulfillment_rate": 0.7071,
+        "amount_committed_paise": 1435215806,
+        "amount_fulfilled_paise": 1047221964,
+        "commitment_to_payment_conversion": 0.6993,
+        "median_days_commitment_to_payment": 1,
+        "average_delay_days": 0.0,
+        "recovered_per_commitment_paise": 8515558,
+        "recovered_per_contact_attempt_paise": 4110033,
+        "instruments_issued": 153,
+        "exact_matched_payments": 106,
+        "exact_matched_paise": 1061789614
+      }
     }
   },
   "uplift": {
-    "urudhi_vs_baseline_paise": 107281197,
-    "urudhi_vs_baseline_points": 5.63,
-    "urudhi_vs_no_action_paise": 911099497,
-    "urudhi_vs_no_action_points": 47.79,
-    "net_urudhi_vs_baseline_paise": 107182662
+    "urudhi_vs_baseline_paise": 73294114,
+    "urudhi_vs_baseline_points": 3.84,
+    "urudhi_vs_no_action_paise": 868690514,
+    "urudhi_vs_no_action_points": 45.56,
+    "net_urudhi_vs_baseline_paise": 73231114
   },
   "attribution": {
     "window_days": 7,
-    "rule": "A payment is attributed to the most recent message sent on the same invoice within the previous 7 days; otherwise it is unattributed (spontaneous, or outside the window). This is an accounting rule, not a causal claim.",
+    "rule": "Exact: a payment that arrived through a payment instrument issued for a specific commitment is attributed to that commitment and the intervention that created it. Window: otherwise, to the most recent message sent on the same invoice within the previous 7 days. Else unattributed (spontaneous, or outside the window). Window attribution is an accounting rule, not a causal claim; exact attribution is provenance (the instrument carried the commitment id), not proof of causation.",
     "arms": {
       "baseline": {
         "by_intervention": {
           "reminder": {
-            "payments": 113,
-            "paise": 1236728300
+            "payments": 114,
+            "paise": 1228306400
+          }
+        },
+        "by_method": {
+          "exact": {
+            "payments": 0,
+            "paise": 0
+          },
+          "window": {
+            "payments": 114,
+            "paise": 1228306400
+          },
+          "unattributed": {
+            "payments": 1,
+            "paise": 1280000
           }
         },
         "unattributed": {
@@ -169,25 +276,39 @@
       "urudhi": {
         "by_intervention": {
           "payment_link": {
-            "payments": 74,
-            "paise": 1056973500
+            "payments": 87,
+            "paise": 1141149550
           },
           "request_promise": {
-            "payments": 20,
-            "paise": 202324300
+            "payments": 19,
+            "paise": 79579400
           },
           "discount_offer": {
-            "payments": 9,
-            "paise": 4277465
+            "payments": 5,
+            "paise": 2560300
           },
           "installment_offer": {
-            "payments": 1,
-            "paise": 15612200
+            "payments": 7,
+            "paise": 40271264
+          }
+        },
+        "by_method": {
+          "exact": {
+            "payments": 106,
+            "paise": 1061789614
+          },
+          "window": {
+            "payments": 12,
+            "paise": 201770900
+          },
+          "unattributed": {
+            "payments": 4,
+            "paise": 39320000
           }
         },
         "unattributed": {
-          "payments": 8,
-          "paise": 66102032
+          "payments": 4,
+          "paise": 39320000
         }
       }
     }
@@ -243,51 +364,51 @@
     ],
     "baseline": [
       0,
-      369949000,
-      605052500,
-      953790200,
-      1039915500,
-      1054205500,
-      1077969200,
-      1086454200,
-      1093950600,
-      1103140700,
-      1139705700,
-      1173063300,
-      1199694500,
-      1219307100,
-      1221754000,
-      1227152500,
-      1227152500,
-      1235043800,
-      1238008300,
-      1238008300,
-      1238008300,
-      1238008300
+      361259000,
+      580622600,
+      890229350,
+      926596250,
+      951797650,
+      991552150,
+      1018480750,
+      1055149550,
+      1070735550,
+      1098587050,
+      1122170400,
+      1152322100,
+      1178121400,
+      1183201800,
+      1198809700,
+      1207770000,
+      1227120500,
+      1229586400,
+      1229586400,
+      1229586400,
+      1229586400
     ],
     "urudhi": [
       0,
-      282145000,
-      584436600,
-      905405200,
-      1012358900,
-      1015328900,
-      1043497000,
-      1064741148,
-      1124388414,
-      1169167314,
-      1223859214,
-      1223859214,
-      1253789214,
-      1270314531,
-      1287294131,
-      1296954131,
-      1298349497,
-      1309326164,
-      1309326164,
-      1341856164,
-      1345289497,
-      1345289497
+      469903500,
+      796592050,
+      1013874750,
+      1044435700,
+      1082450800,
+      1094852300,
+      1109060100,
+      1153365216,
+      1221095916,
+      1224186182,
+      1234364082,
+      1242672582,
+      1242672582,
+      1256477180,
+      1256477180,
+      1256477180,
+      1267453847,
+      1267453847,
+      1302880514,
+      1302880514,
+      1302880514
     ]
   },
   "days_to_recovery": {
@@ -303,24 +424,24 @@
       }
     },
     "baseline": {
-      "median": 3.0,
-      "mean": 4.21,
+      "median": 3,
+      "mean": 5.16,
       "histogram": {
-        "0-3": 45,
-        "4-7": 12,
-        "8-14": 12,
-        "15-21": 1,
+        "0-3": 42,
+        "4-7": 13,
+        "8-14": 16,
+        "15-21": 4,
         "22+": 0
       }
     },
     "urudhi": {
-      "median": 3,
-      "mean": 4.78,
+      "median": 3.0,
+      "mean": 4.11,
       "histogram": {
-        "0-3": 41,
-        "4-7": 17,
+        "0-3": 46,
+        "4-7": 10,
         "8-14": 13,
-        "15-21": 2,
+        "15-21": 1,
         "22+": 0
       }
     }
@@ -329,122 +450,197 @@
     {
       "parameter": "escalate_after_broken_promises",
       "value": 1,
-      "recovered_paise": 1227181398,
-      "recovery_rate": 0.6436,
-      "net_recovered_paise": 1227082863,
-      "messages_sent": 249,
-      "escalations": 37,
-      "discount_cost_paise": 98535,
+      "recovered_paise": 1295043048,
+      "recovery_rate": 0.6792,
+      "net_recovered_paise": 1294980048,
+      "messages_sent": 273,
+      "messages_total": 415,
+      "commitments_fulfilled": 89,
+      "commitments_missed": 30,
+      "escalations": 35,
+      "discount_cost_paise": 63000,
       "stop_contacts": 6,
-      "promises_broken": 29
+      "promises_broken": 22
     },
     {
       "parameter": "escalate_after_broken_promises",
       "value": 2,
-      "recovered_paise": 1345289497,
-      "recovery_rate": 0.7056,
-      "net_recovered_paise": 1345190962,
-      "messages_sent": 302,
-      "escalations": 23,
-      "discount_cost_paise": 98535,
+      "recovered_paise": 1302880514,
+      "recovery_rate": 0.6833,
+      "net_recovered_paise": 1302817514,
+      "messages_sent": 317,
+      "messages_total": 486,
+      "commitments_fulfilled": 99,
+      "commitments_missed": 41,
+      "escalations": 24,
+      "discount_cost_paise": 63000,
       "stop_contacts": 7,
-      "promises_broken": 42
+      "promises_broken": 33
     },
     {
       "parameter": "escalate_after_broken_promises",
       "value": 3,
-      "recovered_paise": 1345289497,
-      "recovery_rate": 0.7056,
-      "net_recovered_paise": 1345190962,
-      "messages_sent": 304,
-      "escalations": 21,
-      "discount_cost_paise": 98535,
+      "recovered_paise": 1302880514,
+      "recovery_rate": 0.6833,
+      "net_recovered_paise": 1302817514,
+      "messages_sent": 319,
+      "messages_total": 489,
+      "commitments_fulfilled": 99,
+      "commitments_missed": 42,
+      "escalations": 23,
+      "discount_cost_paise": 63000,
       "stop_contacts": 7,
-      "promises_broken": 43
+      "promises_broken": 34
     },
     {
       "parameter": "max_attempts_per_invoice",
       "value": 4,
-      "recovered_paise": 1312247480,
-      "recovery_rate": 0.6883,
-      "net_recovered_paise": 1312156928,
-      "messages_sent": 262,
-      "escalations": 32,
-      "discount_cost_paise": 90552,
-      "stop_contacts": 4,
-      "promises_broken": 36
+      "recovered_paise": 1246805282,
+      "recovery_rate": 0.6539,
+      "net_recovered_paise": 1246742282,
+      "messages_sent": 271,
+      "messages_total": 408,
+      "commitments_fulfilled": 92,
+      "commitments_missed": 37,
+      "escalations": 36,
+      "discount_cost_paise": 63000,
+      "stop_contacts": 3,
+      "promises_broken": 29
     },
     {
       "parameter": "max_attempts_per_invoice",
       "value": 6,
-      "recovered_paise": 1345289497,
-      "recovery_rate": 0.7056,
-      "net_recovered_paise": 1345190962,
-      "messages_sent": 302,
-      "escalations": 23,
-      "discount_cost_paise": 98535,
+      "recovered_paise": 1302880514,
+      "recovery_rate": 0.6833,
+      "net_recovered_paise": 1302817514,
+      "messages_sent": 317,
+      "messages_total": 486,
+      "commitments_fulfilled": 99,
+      "commitments_missed": 41,
+      "escalations": 24,
+      "discount_cost_paise": 63000,
       "stop_contacts": 7,
-      "promises_broken": 42
+      "promises_broken": 33
     },
     {
       "parameter": "max_attempts_per_invoice",
       "value": 8,
-      "recovered_paise": 1312759497,
-      "recovery_rate": 0.6885,
-      "net_recovered_paise": 1312660962,
-      "messages_sent": 319,
-      "escalations": 20,
-      "discount_cost_paise": 98535,
-      "stop_contacts": 10,
-      "promises_broken": 43
+      "recovered_paise": 1287444914,
+      "recovery_rate": 0.6752,
+      "net_recovered_paise": 1287381914,
+      "messages_sent": 342,
+      "messages_total": 518,
+      "commitments_fulfilled": 100,
+      "commitments_missed": 41,
+      "escalations": 17,
+      "discount_cost_paise": 63000,
+      "stop_contacts": 13,
+      "promises_broken": 33
     },
     {
       "parameter": "max_discount_bps",
       "value": 0,
-      "recovered_paise": 1343635232,
-      "recovery_rate": 0.7047,
-      "net_recovered_paise": 1343635232,
-      "messages_sent": 315,
-      "escalations": 26,
+      "recovered_paise": 1302220064,
+      "recovery_rate": 0.683,
+      "net_recovered_paise": 1302220064,
+      "messages_sent": 324,
+      "messages_total": 495,
+      "commitments_fulfilled": 96,
+      "commitments_missed": 42,
+      "escalations": 24,
       "discount_cost_paise": 0,
       "stop_contacts": 8,
-      "promises_broken": 40
+      "promises_broken": 33
     },
     {
       "parameter": "max_discount_bps",
       "value": 300,
-      "recovered_paise": 1345289497,
-      "recovery_rate": 0.7056,
-      "net_recovered_paise": 1345190962,
-      "messages_sent": 302,
-      "escalations": 23,
-      "discount_cost_paise": 98535,
+      "recovered_paise": 1302880514,
+      "recovery_rate": 0.6833,
+      "net_recovered_paise": 1302817514,
+      "messages_sent": 317,
+      "messages_total": 486,
+      "commitments_fulfilled": 99,
+      "commitments_missed": 41,
+      "escalations": 24,
+      "discount_cost_paise": 63000,
       "stop_contacts": 7,
-      "promises_broken": 42
+      "promises_broken": 33
     },
     {
       "parameter": "max_discount_bps",
       "value": 500,
-      "recovered_paise": 1345289497,
-      "recovery_rate": 0.7056,
-      "net_recovered_paise": 1345190962,
-      "messages_sent": 302,
-      "escalations": 23,
-      "discount_cost_paise": 98535,
+      "recovered_paise": 1302880514,
+      "recovery_rate": 0.6833,
+      "net_recovered_paise": 1302817514,
+      "messages_sent": 317,
+      "messages_total": 486,
+      "commitments_fulfilled": 99,
+      "commitments_missed": 41,
+      "escalations": 24,
+      "discount_cost_paise": 63000,
       "stop_contacts": 7,
-      "promises_broken": 42
+      "promises_broken": 33
     },
     {
       "parameter": "max_discount_bps",
       "value": 1000,
-      "recovered_paise": 1345289497,
-      "recovery_rate": 0.7056,
-      "net_recovered_paise": 1345190962,
-      "messages_sent": 302,
-      "escalations": 23,
-      "discount_cost_paise": 98535,
+      "recovered_paise": 1302880514,
+      "recovery_rate": 0.6833,
+      "net_recovered_paise": 1302817514,
+      "messages_sent": 317,
+      "messages_total": 486,
+      "commitments_fulfilled": 99,
+      "commitments_missed": 41,
+      "escalations": 24,
+      "discount_cost_paise": 63000,
       "stop_contacts": 7,
-      "promises_broken": 42
+      "promises_broken": 33
+    },
+    {
+      "parameter": "commitment_reminder_days_before",
+      "value": 0,
+      "recovered_paise": 1317114780,
+      "recovery_rate": 0.6908,
+      "net_recovered_paise": 1317051780,
+      "messages_sent": 293,
+      "messages_total": 466,
+      "commitments_fulfilled": 100,
+      "commitments_missed": 42,
+      "escalations": 23,
+      "discount_cost_paise": 63000,
+      "stop_contacts": 7,
+      "promises_broken": 34
+    },
+    {
+      "parameter": "commitment_reminder_days_before",
+      "value": 1,
+      "recovered_paise": 1302880514,
+      "recovery_rate": 0.6833,
+      "net_recovered_paise": 1302817514,
+      "messages_sent": 317,
+      "messages_total": 486,
+      "commitments_fulfilled": 99,
+      "commitments_missed": 41,
+      "escalations": 24,
+      "discount_cost_paise": 63000,
+      "stop_contacts": 7,
+      "promises_broken": 33
+    },
+    {
+      "parameter": "commitment_reminder_days_before",
+      "value": 2,
+      "recovered_paise": 1300089780,
+      "recovery_rate": 0.6819,
+      "net_recovered_paise": 1300026780,
+      "messages_sent": 322,
+      "messages_total": 495,
+      "commitments_fulfilled": 99,
+      "commitments_missed": 42,
+      "escalations": 24,
+      "discount_cost_paise": 63000,
+      "stop_contacts": 7,
+      "promises_broken": 34
     }
   ],
   "caveats": [
@@ -452,7 +648,8 @@
     "Debtor behaviour reacts to the intervention received (link, discount, installment plan, request for a promise, contact fatigue); the trait ranges are stated in code and can be disputed.",
     "The three arms start from byte-identical portfolios and debtor traits; differences between arms are differences in strategy under this model, not causal evidence about real debtors.",
     "Recovered = sum of webhook-observed payments only. Discount cost = amounts waived under settled concessions. Net = recovered − waived.",
-    "A payment is attributed to the most recent message sent on the same invoice within the previous 7 days; otherwise it is unattributed (spontaneous, or outside the window). This is an accounting rule, not a causal claim.",
+    "A commitment is what policy accepted from a promise: exact amount, exact deadline, a payment link tagged with the commitment id. Creating one moves no money; it is fulfilled only by rail events matched to it and missed only by the calendar.",
+    "Exact: a payment that arrived through a payment instrument issued for a specific commitment is attributed to that commitment and the intervention that created it. Window: otherwise, to the most recent message sent on the same invoice within the previous 7 days. Else unattributed (spontaneous, or outside the window). Window attribution is an accounting rule, not a causal claim; exact attribution is provenance (the instrument carried the commitment id), not proof of causation.",
     "Sensitivity runs use the deterministic mock brain so the policy effect is isolated from LLM variance.",
     "With --brain claude the Urudhi arm is not byte-reproducible: model outputs vary."
   ]

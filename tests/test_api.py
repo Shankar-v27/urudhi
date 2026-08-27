@@ -188,7 +188,7 @@ class TestRuntimeAndInbound:
         store, _, client = world
         response = client.post("/inbound/reply", json={"invoice_id": "inv_1", "text": "will pay ₹1,000 in 2 days"},
                                headers=AUTH)
-        assert response.status_code == 200 and response.json()["action"] == "promise_recorded"
+        assert response.status_code == 200 and response.json()["action"] == "commitment_created"
         assert store.get_invoice("inv_1").state is InvoiceState.PROMISED
 
     def test_inbound_email_is_matched_by_subject_reference(self, world):
@@ -249,3 +249,35 @@ class TestHumanWorkflow:
         assert response.status_code == 200 and response.json()["to_state"] == "closed"
         assert client.post("/api/invoices/inv_1/human",
                            json={"action": "acknowledge", "operator": "asha"}, headers=AUTH).status_code == 409
+
+
+class TestRazorpayShapedDelivery:
+    """Real Razorpay bodies have no top-level "id"; the event id is a header."""
+
+    def _razorpay_body(self, kind="payment_link.paid"):
+        return {
+            "entity": "event", "account_id": "acc_test", "event": kind,
+            "contains": ["payment", "payment_link"],
+            "payload": {
+                "payment": {"entity": {"id": "pay_real1", "amount": 100_000, "currency": "INR",
+                                       "status": "captured", "method": "upi",
+                                       "notes": {"invoice_id": "inv_1"}}},
+                "payment_link": {"entity": {"id": "plink_real1", "reference_id": "inv_1",
+                                            "notes": {"invoice_id": "inv_1"}}},
+            },
+            "created_at": 1787823953,
+        }
+
+    def test_event_id_from_header_is_adopted_and_deduplicated(self, client):
+        raw, headers = signed(self._razorpay_body())
+        headers["x-razorpay-event-id"] = "evt_hdr_1"
+        first = client.post("/webhooks/razorpay", content=raw, headers=headers).json()
+        assert first["status"] == "recorded" and first["event_id"] == "evt_hdr_1"
+        again = client.post("/webhooks/razorpay", content=raw, headers=headers).json()
+        assert again["status"] == "replay_ignored"
+        assert client.get("/api/summary", headers=AUTH).json()["recovered_paise"] == 100_000
+
+    def test_without_any_event_id_it_is_still_refused(self, client):
+        raw, headers = signed(self._razorpay_body())
+        assert client.post("/webhooks/razorpay", content=raw, headers=headers).json()["status"] == "ignored"
+        assert client.get("/api/summary", headers=AUTH).json()["recovered_paise"] == 0

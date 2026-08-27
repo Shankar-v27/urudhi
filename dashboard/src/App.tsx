@@ -1,15 +1,16 @@
 import { useState } from "react";
 import { TOKEN_KEY, api, storageGet, storageSet, useLoad } from "./api";
 import { Overview } from "./Overview";
-import { Detail, InvoiceTable, PromiseLedger } from "./Ledger";
+import { CommitmentLedger, Detail, InvoiceTable, PromiseLedger } from "./Ledger";
 import { Escalations, ReplyEvaluation } from "./Ops";
 import { Status } from "./ui";
 
-type Tab = "overview" | "invoices" | "promises" | "escalations" | "eval";
+type Tab = "overview" | "invoices" | "commitments" | "promises" | "escalations" | "eval";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "invoices", label: "Invoices" },
+  { id: "commitments", label: "Commitments" },
   { id: "promises", label: "Promise ledger" },
   { id: "escalations", label: "Escalations" },
   { id: "eval", label: "Reply evaluation" },
@@ -84,6 +85,7 @@ function Workspace() {
       {tab === "invoices" && (
         <Status load={invoices}>{(rows) => <InvoiceTable invoices={rows} onOpen={setOpenId} />}</Status>
       )}
+      {tab === "commitments" && <CommitmentLedger onOpen={setOpenId} />}
       {tab === "promises" && <PromiseLedger />}
       {tab === "escalations" && <Escalations />}
       {tab === "eval" && <ReplyEvaluation />}

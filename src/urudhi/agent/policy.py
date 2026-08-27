@@ -18,11 +18,12 @@ from pydantic import BaseModel, Field
 
 from urudhi.agent.intervention import (
     CONTACTING,
+    PROPOSABLE,
     DecisionContext,
     InterventionKind,
     InterventionRecommendation,
 )
-from urudhi.ledger.models import Channel, Installment, Invoice, InvoiceState
+from urudhi.ledger.models import Channel, Concession, Installment, Invoice, InvoiceState
 from urudhi.ledger.money import Paise, format_inr
 
 BPS_DENOMINATOR = 10_000
@@ -41,6 +42,11 @@ class PolicyConfig(BaseModel):
     max_promise_horizon_days: int = Field(default=30, ge=1)
     min_discount_days_overdue: int = Field(default=14, ge=0)     # no discounts on fresh debt
     min_installment_balance: Paise = Field(default=500_000, ge=0)  # ₹5,000+ to split
+
+    # Executable commitments: what a debtor's promise may be turned into.
+    allow_partial_commitments: bool = True
+    min_commitment: Paise = Field(default=10_000, ge=0)          # ₹100 floor
+    commitment_reminder_days_before: int = Field(default=1, ge=0)  # 0 = never remind
 
     timezone: str = "Asia/Kolkata"        # contact hours are judged in THIS zone
     contact_open: time = time(10, 0)      # RBI-style courtesy window
@@ -277,9 +283,15 @@ def decide_intervention(
         reasons.append(f"{final} → {to}: {why}")
         final = to
 
+    if final not in PROPOSABLE:
+        degrade(InterventionKind.REMINDER, "lifecycle messages are issued by the loop, not proposed")
+
     # 1. A running commitment always wins: never chase over a live promise/plan.
-    running = context.open_promise_on is not None or (
-        context.live_concession is not None and context.live_concession.startswith("installments")
+    running = (
+        context.open_promise_on is not None
+        or context.active_commitment is not None
+        or (context.live_concession is not None
+            and context.live_concession.startswith("installments"))
     )
     if running and final is not InterventionKind.ESCALATE_HUMAN:
         if final is not InterventionKind.WAIT_FOR_PROMISE:
@@ -348,3 +360,94 @@ def decide_intervention(
         proposed=proposal, final=final, offer=offer, gates=gates,
         modified=final is not proposal.action, reasons=reasons,
     )
+
+
+# -- commitment gate ----------------------------------------------------------
+
+class CommitmentVerdict(BaseModel):
+    """Policy's ruling on turning a promise into an executable commitment.
+
+    ``checks`` is the full checklist — every line, allowed or not — so the
+    dashboard can show *why* a commitment exists or why it was refused.
+    """
+
+    allowed: bool
+    checks: list[GateDecision] = Field(default_factory=list)
+    reason: str
+
+    @property
+    def gate(self) -> GateDecision:
+        return GateDecision(allowed=self.allowed, gate="commitment", reason=self.reason)
+
+
+def check_commitment(
+    invoice: Invoice,
+    amount: Paise,
+    due_on: date,
+    today: date,
+    config: PolicyConfig,
+    live_concession: Concession | None = None,
+) -> CommitmentVerdict:
+    """May this (amount, deadline) become an executable commitment on this invoice?"""
+    checks: list[GateDecision] = []
+
+    def check(ok: bool, name: str, reason: str) -> None:
+        checks.append(GateDecision(allowed=ok, gate=name, reason=reason))
+
+    check(invoice.state in ACTIVE_INVOICE_STATES, "invoice_active",
+          f"invoice is {invoice.state}" + ("" if invoice.state in ACTIVE_INVOICE_STATES
+                                           else "; not the agent's to arrange"))
+    check(invoice.state is not InvoiceState.STOP_CONTACT, "not_stop_contact",
+          "debtor has not asked us to stop" if invoice.state is not InvoiceState.STOP_CONTACT
+          else "debtor asked us to stop; no arrangements")
+    check(invoice.state is not InvoiceState.DISPUTED, "no_dispute",
+          "no dispute recorded" if invoice.state is not InvoiceState.DISPUTED
+          else "invoice is disputed; a human owns it")
+    check(amount > 0, "amount_positive", f"amount {format_inr(amount)} is positive"
+          if amount > 0 else f"amount {format_inr(amount)} is not positive")
+    check(amount <= invoice.balance, "amount_within_balance",
+          f"{format_inr(amount)} ≤ balance {format_inr(invoice.balance)}" if amount <= invoice.balance
+          else f"{format_inr(amount)} exceeds balance {format_inr(invoice.balance)}")
+    partial = 0 < amount < invoice.balance
+    if partial:
+        check(config.allow_partial_commitments, "partial_allowed",
+              "partial payments are allowed by policy" if config.allow_partial_commitments
+              else "policy does not allow partial commitments")
+        check(amount >= config.min_commitment, "amount_floor",
+              f"{format_inr(amount)} ≥ floor {format_inr(config.min_commitment)}"
+              if amount >= config.min_commitment
+              else f"{format_inr(amount)} is below the {format_inr(config.min_commitment)} floor")
+    else:
+        check(True, "partial_allowed", "full balance committed")
+    horizon = (due_on - today).days
+    check(horizon >= 0, "deadline_not_past",
+          f"deadline {due_on.isoformat()} is today or later" if horizon >= 0
+          else f"deadline {due_on.isoformat()} is in the past")
+    check(horizon <= config.max_promise_horizon_days, "deadline_within_horizon",
+          f"{horizon} day(s) out, within the {config.max_promise_horizon_days}-day horizon"
+          if horizon <= config.max_promise_horizon_days
+          else f"{horizon} day(s) out exceeds the {config.max_promise_horizon_days}-day horizon")
+    if live_concession is not None and live_concession.state.value == "accepted":
+        conflict = (
+            live_concession.type.value == "installments"
+            or amount < live_concession.settlement_amount
+        )
+        check(not conflict, "consistent_with_offer",
+              "consistent with the accepted offer" if not conflict
+              else "an accepted arrangement is already running; this would undercut it")
+    else:
+        check(True, "consistent_with_offer", "no accepted offer to conflict with")
+
+    failed = [c for c in checks if not c.allowed]
+    if failed:
+        return CommitmentVerdict(allowed=False, checks=checks,
+                                 reason="; ".join(c.reason for c in failed))
+    return CommitmentVerdict(
+        allowed=True, checks=checks,
+        reason=f"{format_inr(amount)} by {due_on.isoformat()} within delegated authority",
+    )
+
+
+ACTIVE_INVOICE_STATES = frozenset(
+    {InvoiceState.OUTSTANDING, InvoiceState.PROMISED, InvoiceState.PARTIALLY_PAID}
+)

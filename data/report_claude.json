@@ -13,6 +13,9 @@
       "max_promise_horizon_days": 30,
       "min_discount_days_overdue": 14,
       "min_installment_balance": 500000,
+      "allow_partial_commitments": true,
+      "min_commitment": 10000,
+      "commitment_reminder_days_before": 1,
       "timezone": "Asia/Kolkata",
       "contact_open": "10:00:00",
       "contact_close": "19:00:00",
@@ -29,12 +32,12 @@
   },
   "money": {
     "outstanding_paise": 338340000,
-    "recovered_paise": 229405500,
-    "waived_paise": 16000,
-    "net_recovered_paise": 229389500,
+    "recovered_paise": 220903900,
+    "waived_paise": 38000,
+    "net_recovered_paise": 220865900,
     "outstanding_inr": "₹33,83,400.00",
-    "recovered_inr": "₹22,94,055.00",
-    "recovery_rate": 0.678,
+    "recovered_inr": "₹22,09,039.00",
+    "recovery_rate": 0.6529,
     "note": "simulation result; recovered = sum of webhook-observed payments"
   },
   "metrics": {
@@ -43,54 +46,84 @@
     "brain": "claude",
     "invoices": 20,
     "amount_at_risk_paise": 338340000,
-    "recovered_paise": 229405500,
-    "recovery_rate": 0.678,
-    "discount_cost_paise": 16000,
-    "net_recovered_paise": 229389500,
-    "invoices_paid": 9,
-    "promises_made": 19,
-    "promises_kept": 14,
-    "promises_broken": 2,
-    "promises_partially_kept": 0,
-    "promise_kept_rate": 0.875,
-    "escalations": 2,
+    "recovered_paise": 220903900,
+    "recovery_rate": 0.6529,
+    "discount_cost_paise": 38000,
+    "net_recovered_paise": 220865900,
+    "invoices_paid": 13,
+    "promises_made": 25,
+    "promises_kept": 19,
+    "promises_broken": 5,
+    "promises_partially_kept": 1,
+    "promise_kept_rate": 0.76,
+    "escalations": 4,
     "disputes": 1,
-    "stop_contacts": 2,
-    "contact_attempts": 45,
-    "replies_received": 31,
-    "offers_made": 4,
-    "offers_accepted": 2,
+    "stop_contacts": 1,
+    "contact_attempts": 54,
+    "messages_total": 82,
+    "replies_received": 34,
+    "offers_made": 3,
+    "offers_accepted": 1,
     "offers_settled": 1,
     "offers_expired": 1,
-    "gates_blocked": 29,
-    "proposals_modified": 7,
+    "gates_blocked": 47,
+    "proposals_modified": 6,
     "brain_deferrals": 0,
-    "days_to_recovery_median": 3,
-    "days_to_recovery_mean": 4.11,
+    "days_to_recovery_median": 2,
+    "days_to_recovery_mean": 3.69,
     "days_to_recovery_histogram": {
-      "0-3": 5,
-      "4-7": 3,
-      "8-14": 1,
+      "0-3": 8,
+      "4-7": 2,
+      "8-14": 3,
       "15-21": 0,
       "22+": 0
     },
-    "audit_events": 495
+    "audit_events": 640,
+    "recovered_per_contact_attempt_paise": 4090812,
+    "recovered_per_message_paise": 2693950,
+    "commitments": {
+      "created": 25,
+      "by_source": {
+        "promise": 24,
+        "concession": 1,
+        "installment": 0,
+        "human": 0
+      },
+      "accepted": 25,
+      "fulfilled": 19,
+      "fulfilled_on_time": 19,
+      "partially_fulfilled": 0,
+      "missed": 6,
+      "cancelled": 0,
+      "active_at_end": 0,
+      "fulfillment_rate": 0.76,
+      "amount_committed_paise": 285543700,
+      "amount_fulfilled_paise": 217313900,
+      "commitment_to_payment_conversion": 0.8,
+      "median_days_commitment_to_payment": 1,
+      "average_delay_days": 0.0,
+      "recovered_per_commitment_paise": 8836156,
+      "recovered_per_contact_attempt_paise": 4090812,
+      "instruments_issued": 25,
+      "exact_matched_payments": 20,
+      "exact_matched_paise": 217313900
+    }
   },
   "invoices_by_state": {
-    "outstanding": 1,
-    "promised": 3,
-    "partially_paid": 2,
-    "paid": 9,
+    "outstanding": 0,
+    "promised": 0,
+    "partially_paid": 1,
+    "paid": 13,
     "disputed": 1,
-    "escalated": 2,
-    "stop_contact": 2,
+    "escalated": 4,
+    "stop_contact": 1,
     "closed": 0
   },
   "per_archetype": {
     "prompt_payer": {
       "invoices": 8,
       "outstanding": 116040000,
-      "recovered": 105779100,
+      "recovered": 116040000,
       "waived": 0
     },
     "promise_breaker": {
@@ -102,14 +135,14 @@
     "cash_strapped": {
       "invoices": 3,
       "outstanding": 53910000,
-      "recovered": 39615500,
+      "recovered": 20115000,
       "waived": 0
     },
     "negotiator": {
       "invoices": 3,
       "outstanding": 73090000,
-      "recovered": 72314000,
-      "waived": 16000
+      "recovered": 73052000,
+      "waived": 38000
     },
     "ghost": {
       "invoices": 2,
@@ -132,41 +165,62 @@
   },
   "attribution": {
     "window_days": 7,
-    "rule": "A payment is attributed to the most recent message sent on the same invoice within the previous 7 days; otherwise it is unattributed (spontaneous, or outside the window). This is an accounting rule, not a causal claim.",
+    "rule": "Exact: a payment that arrived through a payment instrument issued for a specific commitment is attributed to that commitment and the intervention that created it. Window: otherwise, to the most recent message sent on the same invoice within the previous 7 days. Else unattributed (spontaneous, or outside the window). Window attribution is an accounting rule, not a causal claim; exact attribution is provenance (the instrument carried the commitment id), not proof of causation.",
     "by_intervention": {
-      "installment_offer": {
-        "payments": 1,
-        "paise": 383200
+      "payment_link": {
+        "payments": 12,
+        "paise": 189436000
       },
       "reminder": {
-        "payments": 9,
-        "paise": 129956200
-      },
-      "discount_offer": {
-        "payments": 1,
-        "paise": 384000
+        "payments": 2,
+        "paise": 896800
       },
       "request_promise": {
-        "payments": 2,
-        "paise": 73435400
+        "payments": 4,
+        "paise": 26209100
       },
-      "payment_link": {
+      "discount_offer": {
         "payments": 2,
-        "paise": 24876700
+        "paise": 772000
+      },
+      "commitment_confirmation": {
+        "payments": 1,
+        "paise": 3590000
+      }
+    },
+    "by_method": {
+      "exact": {
+        "payments": 20,
+        "paise": 217313900
+      },
+      "window": {
+        "payments": 1,
+        "paise": 3590000
+      },
+      "unattributed": {
+        "payments": 0,
+        "paise": 0
       }
     },
     "unattributed": {
-      "payments": 1,
-      "paise": 370000
+      "payments": 0,
+      "paise": 0
     }
   },
   "exceptions": [
     {
       "invoice_id": "inv_018",
-      "state": "stop_contact",
+      "state": "escalated",
       "balance": 39450000,
       "balance_inr": "₹3,94,500.00",
       "archetype": "ghost"
+    },
+    {
+      "invoice_id": "inv_019",
+      "state": "escalated",
+      "balance": 33775600,
+      "balance_inr": "₹3,37,756.00",
+      "archetype": "cash_strapped"
     },
     {
       "invoice_id": "inv_017",
@@ -183,27 +237,6 @@
       "archetype": "disputer"
     },
     {
-      "invoice_id": "inv_019",
-      "state": "promised",
-      "balance": 10704500,
-      "balance_inr": "₹1,07,045.00",
-      "archetype": "cash_strapped"
-    },
-    {
-      "invoice_id": "inv_020",
-      "state": "promised",
-      "balance": 9313400,
-      "balance_inr": "₹93,134.00",
-      "archetype": "prompt_payer"
-    },
-    {
-      "invoice_id": "inv_013",
-      "state": "escalated",
-      "balance": 3590000,
-      "balance_inr": "₹35,900.00",
-      "archetype": "cash_strapped"
-    },
-    {
       "invoice_id": "inv_014",
       "state": "escalated",
       "balance": 3330000,
@@ -211,36 +244,22 @@
       "archetype": "ghost"
     },
     {
-      "invoice_id": "inv_011",
-      "state": "outstanding",
-      "balance": 760000,
-      "balance_inr": "₹7,600.00",
-      "archetype": "negotiator"
-    },
-    {
-      "invoice_id": "inv_003",
-      "state": "promised",
-      "balance": 590700,
-      "balance_inr": "₹5,907.00",
-      "archetype": "prompt_payer"
-    },
-    {
       "invoice_id": "inv_005",
-      "state": "partially_paid",
+      "state": "escalated",
       "balance": 553100,
       "balance_inr": "₹5,531.00",
       "archetype": "promise_breaker"
     },
     {
-      "invoice_id": "inv_001",
+      "invoice_id": "inv_007",
       "state": "partially_paid",
-      "balance": 356800,
-      "balance_inr": "₹3,568.00",
-      "archetype": "prompt_payer"
+      "balance": 19400,
+      "balance_inr": "₹194.00",
+      "archetype": "cash_strapped"
     }
   ],
   "audit": {
-    "events": 495,
+    "events": 640,
     "chain_verified": true
   }
 }

@@ -84,6 +84,179 @@ export interface Payment {
   razorpay_payment_id: string;
   razorpay_event_id: string;
   observed_at: string;
+  commitment_id?: string | null;
+  matched_by?: MatchedBy;
+}
+
+// -- commitments ----------------------------------------------------------
+// Promise = what the debtor said. Commitment = what deterministic policy accepted
+// (exact amount, exact deadline, a Razorpay Payment Link tagged with the id).
+// Payment = what the rails verified. The shapes below keep those three apart.
+
+export type CommitmentSource = "promise" | "concession" | "installment" | "human";
+export type CommitmentState =
+  | "active" | "partially_fulfilled" | "fulfilled" | "missed" | "cancelled" | "superseded";
+export type MatchedBy = "instrument" | "invoice" | "instrument-late" | null;
+
+export interface Commitment {
+  id: string;
+  invoice_id: string;
+  /** Present on /api/commitments; absent on the invoice detail rows. */
+  invoice_number?: string | null;
+  debtor_id: string;
+  promise_id: string | null;
+  concession_id: string | null;
+  installment_index: number | null;
+  source: CommitmentSource;
+  committed_amount: number;
+  currency: string;
+  due_on: string;
+  due_at: string;
+  state: CommitmentState;
+  instrument_type: "payment_link" | null;
+  instrument_id: string | null;
+  payment_url: string | null;
+  instrument_sent: boolean;
+  reminder_sent: boolean;
+  created_at: string;
+  accepted_at: string | null;
+  fulfilled_at: string | null;
+  missed_at: string | null;
+  resolved_at: string | null;
+  amount_received: number;
+  /** Present on /api/commitments; derive as committed − received elsewhere. */
+  amount_remaining?: number;
+  days_late: number;
+  confidence: number;
+  evidence: string;
+  rationale: string;
+  cancel_reason: string;
+}
+
+/** A pointer into the hash-chained audit log. */
+export interface EventRef {
+  seq: number;
+  at: string;
+  kind: string;
+  hash: string;
+}
+
+export interface PolicyCheck {
+  allowed: boolean;
+  gate: string;
+  reason: string;
+}
+
+export interface Credibility {
+  commitments: number;
+  active: number;
+  fulfilled: number;
+  fulfilled_on_time: number;
+  partially_fulfilled: number;
+  missed: number;
+  cancelled: number;
+  fulfillment_rate: number | null;
+  average_delay_days: number | null;
+  average_committed: number | null;
+  amount_committed: number;
+  amount_received: number;
+  last_outcome: string | null;
+  credibility: number;
+  reasons: string[];
+  summary?: string;
+}
+
+/**
+ * One row of what the rails reported for a commitment. Normally a verified payment;
+ * when no payment row was matched the backend falls back to the fulfilment audit event.
+ */
+export interface RailRow {
+  payment_id?: string;
+  razorpay_payment_id?: string;
+  razorpay_event_id?: string;
+  amount?: number;
+  method?: string;
+  observed_at?: string;
+  matched_by: MatchedBy;
+  event?: EventRef | null;
+  outcome?: string | null;
+  amount_received?: number | null;
+}
+
+/** The provenance chain: said → understood → allowed → instrument → rail → outcome. */
+export interface CommitmentChain {
+  id: string;
+  state: CommitmentState;
+  source: CommitmentSource;
+  invoice_id: string;
+  installment_index: number | null;
+  committed_amount: number;
+  amount_received: number;
+  amount_remaining: number;
+  due_on: string;
+  due_at: string;
+  created_at: string;
+  fulfilled_at: string | null;
+  missed_at: string | null;
+  days_late: number;
+  confidence: number;
+  cancel_reason: string | null;
+  said: {
+    verbatim: string; promise_id: string | null; promise_state: string | null; at: string;
+    event: EventRef | null;
+  };
+  understood: {
+    intent: string | null; amount: number | null; on: string | null; confidence: number;
+    flags: string[]; brain: string | null; partial: boolean; event: EventRef | null;
+  };
+  policy: { allowed: true; reason: string; checks: PolicyCheck[]; event: EventRef | null };
+  instrument: {
+    type: string | null; id: string | null; url: string | null; amount: number; expires: string;
+    notes: string | null; reference_id: string | null; sent: boolean;
+    event: EventRef | null; confirmation: EventRef | null;
+  };
+  rail: RailRow[];
+  outcome: {
+    state: CommitmentState; promise_state: string | null;
+    event: EventRef | null; created_event: EventRef | null;
+  };
+  timeline: (EventRef & { detail: string })[];
+}
+
+/** A promise that was recorded as evidence but refused as a commitment. */
+export interface BlockedCommitment {
+  at: string;
+  amount: number | null;
+  due_on: string | null;
+  promise_id?: string | null;
+  reason: string | null;
+  checks: PolicyCheck[];
+  event?: EventRef | null;
+}
+
+export interface InvoiceCommitments {
+  invoice_id: string;
+  credibility: Credibility;
+  commitments: CommitmentChain[];
+  blocked: BlockedCommitment[];
+}
+
+export interface CommitmentSummary {
+  created: number;
+  active: number;
+  fulfilled: number;
+  fulfilled_on_time: number;
+  partially_fulfilled: number;
+  missed: number;
+  cancelled: number;
+  fulfillment_rate: number | null;
+  amount_committed_paise: number;
+  amount_received_paise: number;
+  conversion: number | null;
+  average_delay_days: number | null;
+  recovered_per_commitment_paise: number | null;
+  recovered_per_attempt_paise: number | null;
+  exact_instrument_matched_paise: number;
 }
 
 export interface AuditEvent {
@@ -106,6 +279,7 @@ export interface Summary {
   by_intervention: Record<string, number>;
   brain: string;
   transport: string;
+  commitments: CommitmentSummary;
 }
 
 export interface TimelinePoint {
@@ -160,6 +334,7 @@ export interface LatestDecision {
 export interface Explain {
   invoice_id: string;
   priority: { score: number; components: Record<string, number>; reasons: string[] };
+  credibility: Credibility;
   latest_decision: LatestDecision | null;
   decision_history: { at: string; proposed: string | null; final: string | null; modified: boolean | null }[];
   promises: {
@@ -171,13 +346,19 @@ export interface Explain {
     balance_at_offer: number; pay_by: string; installments: Installment[];
     payment_link_url: string | null; rationale: string;
   }[];
-  payments: { id: string; amount: number; method: string; observed_at: string; event_id: string }[];
+  commitments: CommitmentChain[];
+  blocked_commitments: BlockedCommitment[];
+  payments: {
+    id: string; amount: number; method: string; observed_at: string; event_id: string;
+    commitment_id: string | null; matched_by: MatchedBy;
+  }[];
   amount_waived: number;
   escalation: { at: string; reason: string | null } | null;
   dispute: { at: string; reason: string | null; verbatim: string | null } | null;
   brain_failures: number;
   interventions: {
     at: string; kind: string | null; responding: boolean; payment_url: string | null; brain: string | null;
+    commitment_id: string | null;
   }[];
 }
 
@@ -188,6 +369,7 @@ export interface InvoiceDetail {
     preferred_channel: string; language: string;
   };
   promises: Promise_[];
+  commitments: Commitment[];
   concessions: Concession[];
   payments: Payment[];
   events: AuditEvent[];
@@ -200,12 +382,16 @@ export interface Audit {
   events: AuditEvent[];
 }
 
-export type HumanAction = "acknowledge" | "note" | "release" | "close";
+export type HumanAction = "acknowledge" | "note" | "arrange" | "release" | "close";
 
 export interface HumanRequest {
   action: HumanAction;
   operator: string;
   notes: string;
+  /** "arrange" only: paise, integer > 0. */
+  amount?: number;
+  /** "arrange" only: YYYY-MM-DD. */
+  due_on?: string;
 }
 
 export interface HumanResult {
@@ -214,6 +400,8 @@ export interface HumanResult {
   notes: string;
   from_state: string;
   to_state: string;
+  /** Set when an "arrange" action opened a commitment. */
+  commitment_id?: string | null;
 }
 
 export interface Escalation {
@@ -227,6 +415,14 @@ export interface Escalation {
   verbatim: string | null;
   acknowledged: boolean;
   human_actions: (HumanResult & { at: string })[];
+  last_commitment: {
+    id: string; committed_amount: number; amount_received: number; due_on: string;
+    state: CommitmentState; evidence: string;
+  } | null;
+  commitments_missed: number;
+  commitments_fulfilled: number;
+  credibility: number;
+  recommended_action: string;
 }
 
 export interface ArmMetrics {
@@ -250,6 +446,32 @@ export interface ArmMetrics {
   offers_accepted: number;
   days_to_recovery_median: number | null;
   days_to_recovery_mean: number | null;
+  /** Absent on reports produced before the commitment engine existed. */
+  recovered_per_contact_attempt_paise?: number | null;
+  commitments?: ArmCommitments;
+}
+
+export interface ArmCommitments {
+  created: number;
+  by_source: Record<string, number>;
+  accepted: number;
+  fulfilled: number;
+  fulfilled_on_time: number;
+  partially_fulfilled: number;
+  missed: number;
+  cancelled: number;
+  active_at_end: number;
+  fulfillment_rate: number | null;
+  amount_committed_paise: number;
+  amount_fulfilled_paise: number;
+  commitment_to_payment_conversion: number | null;
+  median_days_commitment_to_payment: number | null;
+  average_delay_days: number | null;
+  recovered_per_commitment_paise: number | null;
+  recovered_per_contact_attempt_paise: number | null;
+  instruments_issued: number;
+  exact_matched_payments: number;
+  exact_matched_paise: number;
 }
 
 export type ArmName = "no_action" | "baseline" | "urudhi";
@@ -259,9 +481,13 @@ export interface AttributionBucket {
   paise: number;
 }
 
+export type AttributionMethod = "exact" | "window" | "unattributed";
+
 export interface ArmAttribution {
   by_intervention: Record<string, AttributionBucket>;
   unattributed: AttributionBucket;
+  /** Absent on reports produced before the commitment engine existed. */
+  by_method?: Record<AttributionMethod, AttributionBucket>;
 }
 
 export interface SensitivityRow {
@@ -406,6 +632,9 @@ export const api = {
     post<HumanResult>(`/api/invoices/${encodeURIComponent(id)}/human`, body),
   escalations: () => get<Escalation[]>("/api/escalations"),
   promises: () => get<Promise_[]>("/api/promises"),
+  commitments: () => get<Commitment[]>("/api/commitments"),
+  invoiceCommitments: (id: string) =>
+    get<InvoiceCommitments>(`/api/invoices/${encodeURIComponent(id)}/commitments`),
   concessions: () => get<Concession[]>("/api/concessions"),
   audit: () => get<Audit>("/api/audit?limit=500"),
   experiment: () => get<Experiment>("/api/experiment"),

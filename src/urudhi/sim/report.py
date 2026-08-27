@@ -6,9 +6,12 @@ records a reviewer can verify — never from the runner's own bookkeeping.
 Vocabulary the report keeps strictly apart:
 
 * **observed payment** — a ``Payment`` row, i.e. a rail event;
-* **attributed intervention** — the last message sent on that invoice within
-  the attribution window before the payment (a documented rule, not a
-  causal claim);
+* **exact attribution** — the payment arrived through an instrument (a
+  Payment Link) issued for a specific commitment, so the commitment, the
+  invoice and the intervention that created it are known, not inferred;
+* **window attribution** — no instrument match: the last message sent on
+  that invoice within the attribution window before the payment (a
+  documented rule, not a causal claim);
 * **simulation result** — every figure in these files, produced by the
   persona model in ``sim/personas.py``;
 * **real-world claim** — none is made.
@@ -22,16 +25,21 @@ from datetime import date, timedelta
 from typing import Any
 
 from urudhi.audit.log import EventKind, verify_chain
-from urudhi.ledger.models import ConcessionState, InvoiceState, PromiseState
+from urudhi.ledger.commitments import profile_for
+from urudhi.ledger.models import CommitmentState, ConcessionState, InvoiceState, PromiseState
 from urudhi.ledger.money import format_inr
 from urudhi.sim.batch import archetype_of
 from urudhi.sim.runner import Arm, RunResult
 
 ATTRIBUTION_WINDOW_DAYS = 7
 ATTRIBUTION_RULE = (
-    "A payment is attributed to the most recent message sent on the same invoice "
-    f"within the previous {ATTRIBUTION_WINDOW_DAYS} days; otherwise it is unattributed "
-    "(spontaneous, or outside the window). This is an accounting rule, not a causal claim."
+    "Exact: a payment that arrived through a payment instrument issued for a specific "
+    "commitment is attributed to that commitment and the intervention that created it. "
+    "Window: otherwise, to the most recent message sent on the same invoice within the "
+    f"previous {ATTRIBUTION_WINDOW_DAYS} days. Else unattributed (spontaneous, or outside "
+    "the window). Window attribution is an accounting rule, not a causal claim; exact "
+    "attribution is provenance (the instrument carried the commitment id), not proof of "
+    "causation."
 )
 _BUCKETS = [(0, 3, "0-3"), (4, 7, "4-7"), (8, 14, "8-14"), (15, 21, "15-21"), (22, 10_000, "22+")]
 
@@ -56,6 +64,41 @@ def _histogram(days: list[int]) -> dict[str, int]:
                 hist[label] += 1
                 break
     return hist
+
+
+def commitment_metrics(result: RunResult) -> dict[str, Any]:
+    store = result.store
+    rows = [c for c in store.all_commitments() if c.state is not CommitmentState.SUPERSEDED]
+    profile = profile_for(rows)
+    fulfilled = [c for c in rows if c.state is CommitmentState.FULFILLED]
+    with_money = [c for c in rows if c.amount_received > 0]
+    days = [(c.fulfilled_at.date() - c.created_at.date()).days for c in fulfilled if c.fulfilled_at]
+    recovered = sum(i.amount_paid for i in store.all_invoices())
+    attempts = sum(1 for e in store.events_of_kind(EventKind.MESSAGE_SENT)
+                   if not e.payload.get("responding"))
+    payments = store.all_payments()
+    exact = [p for p in payments if (p.matched_by or "").startswith("instrument")]
+    return {
+        "created": len(rows),
+        "by_source": {src: sum(1 for c in rows if c.source.value == src)
+                      for src in ("promise", "concession", "installment", "human")},
+        "accepted": sum(1 for c in rows if c.accepted_at is not None),
+        "fulfilled": profile.fulfilled, "fulfilled_on_time": profile.fulfilled_on_time,
+        "partially_fulfilled": profile.partially_fulfilled, "missed": profile.missed,
+        "cancelled": profile.cancelled, "active_at_end": profile.active,
+        "fulfillment_rate": profile.fulfillment_rate,
+        "amount_committed_paise": profile.amount_committed,
+        "amount_fulfilled_paise": sum(c.amount_received for c in rows),
+        "commitment_to_payment_conversion": (round(len(with_money) / len(rows), 4)
+                                             if rows else None),
+        "median_days_commitment_to_payment": statistics.median(days) if days else None,
+        "average_delay_days": profile.average_delay_days,
+        "recovered_per_commitment_paise": recovered // len(rows) if rows else None,
+        "recovered_per_contact_attempt_paise": recovered // attempts if attempts else None,
+        "instruments_issued": sum(1 for c in rows if c.instrument_id),
+        "exact_matched_payments": len(exact),
+        "exact_matched_paise": sum(p.amount for p in exact),
+    }
 
 
 def arm_metrics(result: RunResult) -> dict[str, Any]:
@@ -89,7 +132,11 @@ def arm_metrics(result: RunResult) -> dict[str, Any]:
         "escalations": sum(1 for i in invoices if i.state is InvoiceState.ESCALATED),
         "disputes": sum(1 for i in invoices if i.state is InvoiceState.DISPUTED),
         "stop_contacts": sum(1 for i in invoices if i.state is InvoiceState.STOP_CONTACT),
-        "contact_attempts": sum(1 for e in events if e.kind is EventKind.MESSAGE_SENT),
+        # Nudges the agent initiated. Answers (confirming what the debtor just
+        # agreed, replying to a question) are counted separately as messages.
+        "contact_attempts": sum(1 for e in events if e.kind is EventKind.MESSAGE_SENT
+                                and not e.payload.get("responding")),
+        "messages_total": sum(1 for e in events if e.kind is EventKind.MESSAGE_SENT),
         "replies_received": sum(1 for e in events if e.kind is EventKind.MESSAGE_RECEIVED),
         "offers_made": len(concessions),
         "offers_accepted": sum(1 for c in concessions if c.state in (
@@ -104,34 +151,59 @@ def arm_metrics(result: RunResult) -> dict[str, Any]:
         "days_to_recovery_mean": round(statistics.mean(ttr), 2) if ttr else None,
         "days_to_recovery_histogram": _histogram(ttr),
         "audit_events": len(events),
+        "recovered_per_contact_attempt_paise": (
+            recovered // nudges if (nudges := sum(
+                1 for e in events if e.kind is EventKind.MESSAGE_SENT
+                and not e.payload.get("responding"))) else None
+        ),
+        "recovered_per_message_paise": (
+            recovered // total if (total := sum(
+                1 for e in events if e.kind is EventKind.MESSAGE_SENT)) else None
+        ),
+        "commitments": commitment_metrics(result),
     }
 
 
 def attribution(result: RunResult, window_days: int = ATTRIBUTION_WINDOW_DAYS) -> dict[str, Any]:
+    """Exact (instrument) attribution first, then the time-window rule, else unattributed."""
     store = result.store
     by_kind: dict[str, dict[str, int]] = defaultdict(lambda: {"payments": 0, "paise": 0})
-    unattributed = {"payments": 0, "paise": 0}
+    by_method = {m: {"payments": 0, "paise": 0} for m in ("exact", "window", "unattributed")}
     rows = []
     for invoice in store.all_invoices():
         sent = store.events_for(invoice.id, EventKind.MESSAGE_SENT)
+        created = store.events_for(invoice.id, EventKind.COMMITMENT_CREATED)
         for payment in store.payments_for(invoice.id):
-            window_start = payment.observed_at - timedelta(days=window_days)
-            prior = [e for e in sent if window_start <= e.at <= payment.observed_at]
-            if prior:
-                kind = str(prior[-1].payload.get("intervention", "reminder"))
+            method, kind, at = "unattributed", None, None
+            if (payment.matched_by or "").startswith("instrument") and payment.commitment_id:
+                method = "exact"
+                birth = next((e for e in created
+                              if e.payload.get("commitment_id") == payment.commitment_id), None)
+                # The intervention that produced the commitment: the last message
+                # before the commitment was created (the ask), else the source.
+                before = [e for e in sent if birth is not None and e.at <= birth.at
+                          and e.payload.get("intervention") != "commitment_confirmation"]
+                kind = (str(before[-1].payload.get("intervention", "reminder")) if before
+                        else f"commitment:{birth.payload.get('source') if birth else 'unknown'}")
+                at = birth.at.isoformat() if birth else None
+            else:
+                window_start = payment.observed_at - timedelta(days=window_days)
+                prior = [e for e in sent if window_start <= e.at <= payment.observed_at]
+                if prior:
+                    method = "window"
+                    kind = str(prior[-1].payload.get("intervention", "reminder"))
+                    at = prior[-1].at.isoformat()
+            by_method[method]["payments"] += 1
+            by_method[method]["paise"] += payment.amount
+            if kind is not None:
                 by_kind[kind]["payments"] += 1
                 by_kind[kind]["paise"] += payment.amount
-                rows.append({"invoice_id": invoice.id, "payment_id": payment.id,
-                             "amount": payment.amount, "attributed_to": kind,
-                             "message_at": prior[-1].at.isoformat(),
-                             "observed_at": payment.observed_at.isoformat()})
-            else:
-                unattributed["payments"] += 1
-                unattributed["paise"] += payment.amount
-                rows.append({"invoice_id": invoice.id, "payment_id": payment.id,
-                             "amount": payment.amount, "attributed_to": None,
-                             "observed_at": payment.observed_at.isoformat()})
-    return {"by_intervention": dict(by_kind), "unattributed": unattributed, "payments": rows}
+            rows.append({"invoice_id": invoice.id, "payment_id": payment.id,
+                         "amount": payment.amount, "method": method, "attributed_to": kind,
+                         "commitment_id": payment.commitment_id, "anchor_at": at,
+                         "observed_at": payment.observed_at.isoformat()})
+    return {"by_intervention": dict(by_kind), "by_method": by_method,
+            "unattributed": by_method["unattributed"], "payments": rows}
 
 
 def timeline(result: RunResult) -> dict[str, int]:
@@ -246,6 +318,9 @@ def build_experiment(results: dict[Arm, RunResult], sensitivity: list[dict[str, 
             "about real debtors.",
             "Recovered = sum of webhook-observed payments only. Discount cost = amounts waived "
             "under settled concessions. Net = recovered − waived.",
+            "A commitment is what policy accepted from a promise: exact amount, exact deadline, "
+            "a payment link tagged with the commitment id. Creating one moves no money; it is "
+            "fulfilled only by rail events matched to it and missed only by the calendar.",
             ATTRIBUTION_RULE,
             "Sensitivity runs use the deterministic mock brain so the policy effect is isolated "
             "from LLM variance.",
@@ -262,6 +337,8 @@ def sensitivity_grid() -> list[tuple[str, int]]:
         ("max_attempts_per_invoice", 8),
         ("max_discount_bps", 0), ("max_discount_bps", 300), ("max_discount_bps", 500),
         ("max_discount_bps", 1000),
+        ("commitment_reminder_days_before", 0), ("commitment_reminder_days_before", 1),
+        ("commitment_reminder_days_before", 2),
     ]
 
 
@@ -271,7 +348,9 @@ def sensitivity_row(parameter: str, value: int, result: RunResult) -> dict[str, 
         "parameter": parameter, "value": value,
         "recovered_paise": m["recovered_paise"], "recovery_rate": m["recovery_rate"],
         "net_recovered_paise": m["net_recovered_paise"],
-        "messages_sent": m["contact_attempts"], "escalations": m["escalations"],
+        "messages_sent": m["contact_attempts"], "messages_total": m["messages_total"],
+        "commitments_fulfilled": m["commitments"]["fulfilled"],
+        "commitments_missed": m["commitments"]["missed"], "escalations": m["escalations"],
         "discount_cost_paise": m["discount_cost_paise"], "stop_contacts": m["stop_contacts"],
         "promises_broken": m["promises_broken"],
     }
@@ -291,7 +370,21 @@ def summarize_for_stdout(experiment: dict[str, Any]) -> str:
         ("days to recovery (median)", lambda m: str(m["days_to_recovery_median"])),
         ("promises kept / broken", lambda m: f"{m['promises_kept']} / {m['promises_broken']}"),
         ("offers made / accepted", lambda m: f"{m['offers_made']} / {m['offers_accepted']}"),
-        ("contact attempts", lambda m: str(m["contact_attempts"])),
+        ("contact attempts (nudges)", lambda m: str(m["contact_attempts"])),
+        ("messages incl. answers", lambda m: str(m["messages_total"])),
+        ("₹ recovered / nudge", lambda m: (format_inr(m["recovered_per_contact_attempt_paise"])
+                                          if m["recovered_per_contact_attempt_paise"] else "—")),
+        ("commitments created", lambda m: str(m["commitments"]["created"])),
+        ("fulfilled / partial / missed", lambda m: f"{m['commitments']['fulfilled']} / "
+                                                   f"{m['commitments']['partially_fulfilled']} / "
+                                                   f"{m['commitments']['missed']}"),
+        ("commitment fulfilment rate", lambda m: (f"{m['commitments']['fulfillment_rate']:.1%}"
+                                                  if m['commitments']['fulfillment_rate'] is not None
+                                                  else "—")),
+        ("₹ recovered / commitment", lambda m: (
+            format_inr(m["commitments"]["recovered_per_commitment_paise"])
+            if m["commitments"]["recovered_per_commitment_paise"] else "—")),
+        ("exact-matched ₹ (instrument)", lambda m: format_inr(m["commitments"]["exact_matched_paise"])),
         ("escalations / disputes", lambda m: f"{m['escalations']} / {m['disputes']}"),
         ("stop-contacts", lambda m: str(m["stop_contacts"])),
     ]
