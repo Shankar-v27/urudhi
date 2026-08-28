@@ -1,18 +1,19 @@
 /**
- * Commitment drawer: the provenance chain for one commitment, read from `/api/invoices/{id}`
- * (`explain.commitments[]` has every step; `commitments[]` carries the instrument mode flags).
+ * Commitment drawer: one commitment's full provenance, read from `GET /api/commitments/{id}` — which looks across
+ * both ledgers and returns the row, its invoice and debtor, the chain (said → understood → allowed → instrument →
+ * rail → outcome) and the audit-chain status of the ledger it lives in.
  */
 
 import { ReactNode } from "react";
 import {
-  Commitment, CommitmentChain, EventRef, Health, InvoiceDetail, MatchedBy, RailRow, api, inr, num,
-  relativeDays, useLoad, when, whenIST,
+  ChainStatus, CommitmentChain, CommitmentDetail, EventRef, MatchedBy, RailRow, api, inr, num, relativeDays, useLoad,
+  when, whenIST,
 } from "../api";
 import {
-  Checklist, Drawer, DrawerSection, EmptyState, Fact, IntegrityStep, ModeBadge, Pill, Ref, Skeleton, Status,
+  Checklist, Drawer, DrawerSection, EmptyState, Fact, IntegrityStep, ModeBadge, Pill, Ref, SourceBadge, Status,
   StatusBadge, StepStatus, stateLabel,
 } from "../ui";
-import { InstrumentAction, InstrumentFacts, factsFromChain } from "./InstrumentAction";
+import { InstrumentAction, InstrumentFacts, deriveInstrument, factsFromChain } from "./InstrumentAction";
 
 export function MatchTag({ matchedBy }: { matchedBy: MatchedBy | undefined }) {
   switch (matchedBy) {
@@ -33,7 +34,7 @@ function RailPayment({ row }: { row: RailRow }) {
           <span className="muted">{when(row.observed_at)}</span>
           <MatchTag matchedBy={row.matched_by} />
         </div>
-        <div className="muted small mono">{row.razorpay_payment_id} · event {row.razorpay_event_id}</div>
+        <div className="muted small mono">razorpay payment {row.razorpay_payment_id} · event {row.razorpay_event_id}</div>
       </li>
     );
   }
@@ -49,14 +50,19 @@ function RailPayment({ row }: { row: RailRow }) {
   );
 }
 
-/** Instrument facts for the chain, preferring the row flags (they carry `instrument_failed`). */
-function facts(chain: CommitmentChain, row: Commitment | undefined): InstrumentFacts {
-  const f = factsFromChain(chain);
-  if (row) {
-    f.instrument_mode = row.instrument_mode ?? f.instrument_mode;
-    f.instrument_failed = (row.instrument_failed ?? false) || Boolean(f.instrument_failed);
-  }
+/** Instrument facts for the chain, letting the row's explicit, persisted flags win over the chain's. */
+function facts(d: CommitmentDetail): InstrumentFacts {
+  const f = factsFromChain(d.chain);
+  const row = d.commitment;
+  f.instrument_mode = row.instrument_mode ?? f.instrument_mode;
+  f.instrument_failed = (row.instrument_failed ?? false) || Boolean(f.instrument_failed);
+  f.failure_reason = row.instrument_failure || f.failure_reason || null;
   return f;
+}
+
+function note(notes: Record<string, string> | string | null, key: string): string | null {
+  if (!notes || typeof notes === "string") return null;
+  return notes[key] ?? null;
 }
 
 function notesList(notes: Record<string, string> | string | null): ReactNode {
@@ -80,8 +86,8 @@ export function stepStatuses(chain: CommitmentChain, f: InstrumentFacts): Record
   };
 }
 
-export function CommitmentIntegrity({ chain, row, now }: { chain: CommitmentChain; row?: Commitment; now?: number }) {
-  const f = facts(chain, row);
+/** The six-step provenance visual. */
+export function CommitmentIntegrity({ chain, f, now }: { chain: CommitmentChain; f: InstrumentFacts; now?: number }) {
   const s = stepStatuses(chain, f);
   const u = chain.understood;
   const ins = chain.instrument;
@@ -125,7 +131,7 @@ export function CommitmentIntegrity({ chain, row, now }: { chain: CommitmentChai
       </IntegrityStep>
 
       <IntegrityStep n={4} title="What payment instrument was issued" status={s.instrument} event={ins.event}
-        statusText={ins.mode ? <ModeBadge mode={ins.mode} /> : undefined}>
+        statusText={f.instrument_mode ? <ModeBadge mode={f.instrument_mode} /> : undefined}>
         {s.instrument === "failed" ? (
           <>
             <InstrumentAction facts={f} now={now} />
@@ -179,7 +185,7 @@ export function CommitmentIntegrity({ chain, row, now }: { chain: CommitmentChai
   );
 }
 
-function AuditRefs({ chain, chainStatus }: { chain: CommitmentChain; chainStatus: Health["audit_chain"] | null }) {
+function AuditRefs({ chain, chainStatus }: { chain: CommitmentChain; chainStatus: ChainStatus | null }) {
   const refs: { label: string; event: EventRef | null | undefined }[] = [
     { label: "Debtor message", event: chain.said.event },
     { label: "Interpretation", event: chain.understood.event },
@@ -212,74 +218,198 @@ function AuditRefs({ chain, chainStatus }: { chain: CommitmentChain; chainStatus
   );
 }
 
-/** The drawer body given loaded data; exported so tests can render it without the network. */
-export function CommitmentDrawerBody({ detail, id, chainStatus, now, onOpenInvoice }: {
-  detail: InvoiceDetail; id: string; chainStatus: Health["audit_chain"] | null; now?: number;
-  onOpenInvoice?: (invoiceId: string) => void;
-}) {
-  const chain = detail.explain.commitments.find((c) => c.id === id);
-  const row = detail.commitments.find((c) => c.id === id);
-  if (!chain) {
-    return <EmptyState title="Commitment not found" hint={<>No commitment <code>{id}</code> on invoice {detail.invoice.number}.</>} />;
+/** Razorpay's view of the instrument next to Urudhi's view of the commitment, field by field. */
+function Mapping({ d }: { d: CommitmentDetail }) {
+  const ins = d.chain.instrument;
+  const c = d.commitment;
+  const pair = (k: string, v: ReactNode, text = false) => (
+    <div className="kvp"><span className="k">{k}</span><span className={`v ${text ? "text" : ""}`}>{v}</span></div>
+  );
+  const dash = <span className="muted">—</span>;
+  return (
+    <div className="mapping" role="table" aria-label="Razorpay to Urudhi mapping">
+      <div className="col" role="rowgroup">
+        <h4>Razorpay</h4>
+        {pair("Payment Link", ins.id ?? dash)}
+        {pair("Amount", inr(ins.amount))}
+        {pair("Reference ID", ins.reference_id ?? dash)}
+        {pair("notes.commitment_id", note(ins.notes, "commitment_id") ?? dash)}
+        {pair("notes.invoice_id", note(ins.notes, "invoice_id") ?? dash)}
+      </div>
+      <div className="link" aria-hidden="true">⇄</div>
+      <div className="col" role="rowgroup">
+        <h4>Urudhi</h4>
+        {pair("Commitment", c.id)}
+        {pair("Committed", inr(c.committed_amount))}
+        {pair("Invoice", <>{d.invoice.number} <span className="muted">{d.invoice.id}</span></>, true)}
+        {pair("Debtor", d.debtor.name, true)}
+        {pair("Ledger", <SourceBadge source={d.source} />, true)}
+      </div>
+    </div>
+  );
+}
+
+function urlStatus(f: InstrumentFacts, now?: number): { label: string; tone: "success" | "warn" | "neutral" | "info" | "danger" } {
+  const v = deriveInstrument(f, now);
+  switch (v.kind) {
+    case "live": return { label: "live", tone: "success" };
+    case "expired": return { label: "expired", tone: "warn" };
+    case "paid": return { label: "paid", tone: "success" };
+    case "missed": return { label: v.expiredUrl ? "expired" : "none", tone: "danger" };
+    case "sandbox": return { label: "sandbox — no checkout", tone: "info" };
+    case "failed": return { label: "none — rail refused", tone: "danger" };
+    case "not_issued": return { label: "none", tone: "neutral" };
+    default: return { label: v.kind, tone: "neutral" };
   }
-  const f = facts(chain, row);
+}
+
+/** The drawer body given loaded data; exported so tests can render it without the network. */
+export function CommitmentDrawerBody({ detail, now, onOpenInvoice }: {
+  detail: CommitmentDetail; now?: number; onOpenInvoice?: (invoiceId: string) => void;
+}) {
+  const d = detail;
+  const chain = d.chain;
+  const c = d.commitment;
+  const u = chain.understood;
+  const ins = chain.instrument;
+  const f = facts(d);
+  const rail = f.instrument_mode ?? c.rail ?? null;
+  const status = urlStatus(f, now);
+  const pending = (chain.state === "active" || chain.state === "partially_fulfilled") && chain.amount_received === 0;
+  const fulfilment = chain.committed_amount > 0 ? chain.amount_received / chain.committed_amount : null;
   return (
     <>
+      <div className="provenance-strip" aria-label="Provenance">
+        <SourceBadge source={d.source} />
+        {rail ? <ModeBadge mode={rail} /> : <Pill tone="neutral">no rail</Pill>}
+        <span>brain <b>{u.brain ?? "—"}</b></span>
+        <span>debtor <b>{d.debtor.name}</b> · {d.debtor.phone} · {d.debtor.email}</span>
+      </div>
+
+      <DrawerSection title="Promise" badge={chain.said.promise_state ? <StatusBadge state={chain.said.promise_state} /> : undefined}>
+        {chain.said.verbatim
+          ? <blockquote className="quote">“{chain.said.verbatim}”</blockquote>
+          : <p className="quote muted">No debtor message — this commitment was opened without one.</p>}
+        <div className="kv small" style={{ marginTop: 8 }}>
+          <span><span className="k">promise</span><span className="mono">{chain.said.promise_id ?? "—"}</span></span>
+          <span><span className="k">said</span>{when(chain.said.at)}</span>
+          <Ref event={chain.said.event} />
+        </div>
+      </DrawerSection>
+
+      <DrawerSection title="AI interpretation" badge={<Pill tone="outline">brain {u.brain ?? "—"}</Pill>}>
+        <div className="facts">
+          <Fact k="Intent" v={<b>{stateLabel(u.intent)}</b>} />
+          <Fact k="Amount" v={u.amount !== null ? inr(u.amount) : "—"} money={u.amount !== null} />
+          <Fact k="Date" v={u.on ?? "—"} />
+          <Fact k="Confidence" v={num(u.confidence, 2)} />
+          <Fact k="Brain" v={u.brain ?? "—"} />
+          <Fact k="Audit" v={<Ref event={u.event} />} />
+        </div>
+        {(u.partial || u.flags.length > 0) && (
+          <div className="kv small" style={{ marginTop: 8 }}>
+            {u.partial && <Pill tone="warn" title="The debtor offered part of the balance">partial</Pill>}
+            {u.flags.map((flag) => <Pill key={flag} tone="outline">{flag}</Pill>)}
+          </div>
+        )}
+      </DrawerSection>
+
+      <DrawerSection title="Policy" badge={<Pill tone="success">{chain.policy.checks.filter((k) => k.allowed).length}/{chain.policy.checks.length} checks passed</Pill>}>
+        <Checklist checks={chain.policy.checks} />
+        <div className="decision-line">
+          <span className="checklist"><span className="mark pos">✓</span></span>
+          <b>Accepted</b>
+          {chain.policy.reason && <span className="muted">— {chain.policy.reason}</span>}
+          <Ref event={chain.policy.event} />
+        </div>
+      </DrawerSection>
+
       <DrawerSection title="Commitment" badge={<StatusBadge state={chain.state} />}>
         <div className="facts">
+          <Fact k="Commitment ID" v={<span className="mono">{c.id}</span>} />
           <Fact k="Amount" v={inr(chain.committed_amount)} money />
           <Fact k="Deadline" v={<>{whenIST(chain.due_at)}<span className="secondary muted small" style={{ display: "block" }}>{relativeDays(chain.due_on)}</span></>} />
-          <Fact k="Source" v={<>{chain.source}{chain.installment_index !== null ? ` · installment #${chain.installment_index}` : ""}</>} />
+          <Fact k="Status" v={<StatusBadge state={chain.state} />} />
+          <Fact k="Source" v={<SourceBadge source={d.source} />} />
+          <Fact k="Opened by" v={<>{chain.source}{chain.installment_index !== null ? ` · installment #${chain.installment_index}` : ""}</>} />
           <Fact k="Invoice" v={onOpenInvoice
-            ? <button type="button" className="btn sm" onClick={() => onOpenInvoice(chain.invoice_id)}>View invoice {detail.invoice.number}</button>
-            : detail.invoice.number} />
-          <Fact k="Debtor" v={detail.debtor.name} />
+            ? <button type="button" className="btn sm" onClick={() => onOpenInvoice(chain.invoice_id)}>View invoice {d.invoice.number}</button>
+            : d.invoice.number} />
+          <Fact k="Debtor" v={d.debtor.name} />
           <Fact k="Created" v={whenIST(chain.created_at)} />
+        </div>
+        {chain.cancel_reason && <p className="small muted" style={{ marginTop: 8 }}>{chain.cancel_reason}</p>}
+      </DrawerSection>
+
+      <DrawerSection title="Payment instrument" badge={rail ? <ModeBadge mode={rail} /> : undefined}>
+        <div className="facts">
+          <Fact k="Source" v={<SourceBadge source={d.source} />} />
+          <Fact k="Rail" v={rail === "razorpay_test" ? "Razorpay Test Mode" : rail === "sandbox" ? "Sandbox" : "—"} />
+          <Fact k="Type" v={stateLabel(ins.type)} />
+          <Fact k="Payment Link ID" v={<span className="mono">{ins.id ?? "—"}</span>} />
+          <Fact k="Reference ID" v={<span className="mono">{ins.reference_id ?? c.id}</span>} title="Razorpay reference_id = the commitment id" />
+          <Fact k="notes.invoice_id" v={<span className="mono">{note(ins.notes, "invoice_id") ?? "—"}</span>} />
+          <Fact k="notes.commitment_id" v={<span className="mono">{note(ins.notes, "commitment_id") ?? "—"}</span>} />
+          <Fact k="URL status" v={<Pill tone={status.tone}>{status.label}</Pill>} />
+          <Fact k="Mode" v={<span className="mono">{f.instrument_mode ?? "—"}</span>} />
+          <Fact k="Payment status" v={pending ? <Pill tone="warn">Payment pending</Pill> : <StatusBadge state={chain.state} />} />
         </div>
         <div className="kv" style={{ marginTop: 12 }}>
           <InstrumentAction facts={f} now={now} />
+          {(ins.id || ins.url) && (ins.sent
+            ? <Pill tone="success" title="Confirmation message went to the debtor">sent to debtor{ins.confirmation ? ` · #${ins.confirmation.seq}` : ""}</Pill>
+            : <Pill tone="warn">not yet sent</Pill>)}
         </div>
+        {f.instrument_failed && f.failure_reason && <p className="neg small" style={{ marginTop: 8 }}>{f.failure_reason}</p>}
+      </DrawerSection>
+
+      <DrawerSection title="Razorpay ↔ Urudhi mapping">
+        <Mapping d={d} />
+      </DrawerSection>
+
+      <DrawerSection title="Outcome" badge={<StatusBadge state={chain.outcome.state} />}>
+        <div className="facts">
+          <Fact k="Received" v={inr(chain.amount_received)} money />
+          <Fact k="Remaining" v={inr(chain.amount_remaining)} money />
+          <Fact k="Fulfilment" v={fulfilment === null ? "—" : `${(fulfilment * 100).toFixed(0)}%`} />
+          <Fact k="Days late" v={chain.days_late > 0 ? <span className="neg">{chain.days_late} d</span> : "0"} />
+          {chain.outcome.promise_state && <Fact k="Promise state" v={<StatusBadge state={chain.outcome.promise_state} />} />}
+          {chain.fulfilled_at && <Fact k="Fulfilled at" v={whenIST(chain.fulfilled_at)} />}
+          {chain.missed_at && <Fact k="Missed at" v={whenIST(chain.missed_at)} />}
+        </div>
+        {pending && <p className="muted small" style={{ marginTop: 8 }}>Payment pending — the commitment is open and the rails have reported nothing yet.</p>}
+        {chain.rail.length > 0 && <ul className="payments" style={{ marginTop: 10 }}>{chain.rail.map((r, i) => <RailPayment key={r.payment_id ?? r.event?.seq ?? i} row={r} />)}</ul>}
       </DrawerSection>
 
       <DrawerSection title="Commitment integrity" badge={<span className="muted small">said → understood → accepted → instrument → money → outcome</span>}>
-        <CommitmentIntegrity chain={chain} row={row} now={now} />
+        <CommitmentIntegrity chain={chain} f={f} now={now} />
       </DrawerSection>
 
-      <DrawerSection title="Integrity — audit references">
-        <AuditRefs chain={chain} chainStatus={chainStatus} />
+      <DrawerSection title="Integrity" badge={d.audit_chain.verified
+        ? <Pill tone="success">verified · {num(d.audit_chain.events ?? 0)} events</Pill>
+        : <Pill tone="danger">chain broken</Pill>}>
+        <AuditRefs chain={chain} chainStatus={d.audit_chain} />
       </DrawerSection>
     </>
   );
 }
 
-/**
- * Opens by commitment id. When the invoice id is not known (deep link) it is resolved from /api/commitments
- * first; the Drawer itself stays mounted throughout so focus and scroll position are not reset.
- */
-export function CommitmentDrawer({ id, invoiceId, onClose, onOpenInvoice }: {
-  id: string; invoiceId?: string | null; onClose: () => void; onOpenInvoice: (invoiceId: string) => void;
+/** Opens by commitment id from either ledger; the Drawer stays mounted throughout so focus and scroll are kept. */
+export function CommitmentDrawer({ id, onClose, onOpenInvoice }: {
+  id: string; onClose: () => void; onOpenInvoice: (invoiceId: string) => void;
 }) {
-  const rows = useLoad(() => (invoiceId ? Promise.resolve<Commitment[] | null>(null) : api.commitments()), [invoiceId]);
-  const resolved = invoiceId ?? rows.data?.find((c) => c.id === id)?.invoice_id ?? null;
-  // Until the invoice id is known the loader never settles, which keeps `detail` in its loading state.
-  const detail = useLoad(() => (resolved ? api.invoice(resolved) : new Promise<InvoiceDetail>(() => {})), [resolved]);
-  const health = useLoad(api.health);
-  const chain = detail.data?.explain.commitments.find((c) => c.id === id) ?? null;
-  const unresolved = !resolved && rows.data !== null && !rows.error;
+  const detail = useLoad(() => api.commitment(id), [id]);
+  const d = detail.data;
   return (
     <Drawer
-      eyebrow={<>Commitment · <span className="mono">{id}</span></>}
-      title={chain ? <><span className="money">{inr(chain.committed_amount)}</span><StatusBadge state={chain.state} /></> : "Commitment"}
+      eyebrow={<>Commitment · <span className="mono">{id}</span>{d && <> · <SourceBadge source={d.source} /></>}</>}
+      title={d ? <><span className="money">{inr(d.chain.committed_amount)}</span><StatusBadge state={d.chain.state} /></> : "Commitment"}
       onClose={onClose}
     >
-      {rows.error ? <Status load={rows}>{() => null}</Status>
-        : unresolved ? <EmptyState title="Commitment not found" hint={<>No commitment with id <code>{id}</code>.</>} />
-        : !resolved ? <Skeleton rows={8} />
-        : (
-          <Status load={detail} rows={8}>
-            {(d) => <CommitmentDrawerBody detail={d} id={id} chainStatus={health.data?.audit_chain ?? null} onOpenInvoice={onOpenInvoice} />}
-          </Status>
-        )}
+      <Status load={detail} rows={8}
+        notFound={<EmptyState title="No matching commitment in current data source" hint={<>No commitment with id <code>{id}</code> in either ledger.</>} />}>
+        {(data) => <CommitmentDrawerBody detail={data} onOpenInvoice={onOpenInvoice} />}
+      </Status>
     </Drawer>
   );
 }

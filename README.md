@@ -70,6 +70,39 @@ terminal — the kept commitment above, and a promise broken twice → chasing
 stops → human approves a new arrangement. See
 [docs/architecture.md](docs/architecture.md) for the state machine.
 
+## Simulation and Live Test — two ledgers, one product, never mixed
+
+Urudhi runs two environments side by side and labels every row with where
+it came from:
+
+| | **Simulation** | **Live Test** |
+|---|---|---|
+| ledger | `data/run.sqlite3`, written by `python -m urudhi.sim` | `data/live_demo.sqlite3`, written by the real app |
+| debtors & replies | synthetic personas | real replies typed into `/inbound/reply` or the fixture script |
+| brain | deterministic mock (reproducible) | Claude via the configured endpoint |
+| payment rail | `FakeRails` → **sandbox instruments** (`plink_fake_…`, `https://sandbox.urudhi.invalid/…`, never clickable) | `RazorpayRails` → **real test-mode Payment Links** (Razorpay's own `short_url`, stored verbatim) |
+| payments | webhook-shaped events fabricated by the runner | real signed Razorpay webhooks |
+| label | `SOURCE: SIMULATION · RAIL: SANDBOX` | `SOURCE: LIVE TEST · RAIL: RAZORPAY TEST MODE` |
+
+`python -m urudhi.api --db data/live_demo.sqlite3 --sim-db data/run.sqlite3`
+serves both; every list endpoint takes `?source=all|live_test|simulation`,
+and the dashboard's header selector switches between them. Writes (webhooks,
+replies, ticks, human actions) go to the ledger that owns the record; rail
+events only ever touch the live ledger. Instrument mode (`razorpay_test` /
+`sandbox`) is persisted on each commitment when the instrument is issued —
+the UI never guesses from a URL.
+
+**Provisioning real instruments is deliberate and idempotent.** The 120-invoice
+benchmark is never turned into real links. `python scripts/live_fixtures.py
+--brain claude` builds a small live-test set through the real loop (Claude
+interprets, policy rules, Razorpay issues), and `python -m urudhi.provision
+--db data/live_demo.sqlite3 --commitment cmt_… [--dry-run]` (re)issues a link
+for a selected commitment: skipped if it already holds a Razorpay instrument,
+refused for sandbox instruments, recorded as *Instrument failed* if Razorpay
+declines (this test account caps a single link at ₹50,000 and rate-limits
+bursts). Each link uses the approved commitment amount, `reference_id` =
+commitment id, `notes = {invoice_id, commitment_id}`, `expire_by` = deadline.
+
 ## What is real, what is simulated, what is test-mode
 
 | | |

@@ -300,3 +300,51 @@ class TestInstrumentMode:
         assert instrument_mode("plink_TUmLQ82CcnfqwP", "https://rzp.io/rzp/fLnAb1SP") == "razorpay_test"
         assert instrument_mode("plink_fake_0004", "https://rzp.io/l/fake0004") == "sandbox"  # legacy rows
         assert instrument_mode(None, None) is None
+
+
+class TestTwoLedgers:
+    """The live ledger and the simulation ledger are served as one product view, labelled per row."""
+
+    def _sim_store(self):
+        from urudhi.sim.runner import Arm, RunConfig, run_batch
+        return run_batch(RunConfig(days=5, count=12, seed=7, arm=Arm.URUDHI)).store
+
+    def _two_ledger_client(self, world):
+        store, outbox, _ = world
+        agent = RecoveryAgent(store, MockBrain(), outbox, rails=FakeRails())
+        app = create_app(store, webhook_secret=SECRET, api_token=TOKEN, agent=agent,
+                         simulation_store=self._sim_store(), brain_name="mock", rails_mode="sandbox")
+        return store, TestClient(app)
+
+    def test_source_filter_and_labels(self, world):
+        store, c = self._two_ledger_client(world)
+        c.post("/inbound/reply", json={"invoice_id": "inv_1", "text": "will pay ₹1,000 in 2 days"}, headers=AUTH)
+        live = c.get("/api/commitments?source=live_test", headers=AUTH).json()
+        simu = c.get("/api/commitments?source=simulation", headers=AUTH).json()
+        both = c.get("/api/commitments", headers=AUTH).json()
+        assert {r["source"] for r in live} == {"live_test"} and {r["source"] for r in simu} == {"simulation"}
+        assert len(both) == len(live) + len(simu) and len(simu) > 0
+        assert all(r["instrument_mode"] == "sandbox" for r in simu)
+        health = c.get("/health").json()
+        assert [lg["source"] for lg in health["ledgers"]] == ["live_test", "simulation"]
+        assert health["ledgers"][1]["brain"] == "mock"
+        summary = c.get("/api/summary?source=simulation", headers=AUTH).json()
+        assert summary["context"]["rail"] == "sandbox" and "Simulation" in summary["context"]["provenance"]
+        assert c.get("/api/summary?source=live_test", headers=AUTH).json()["context"]["source"] == "live_test"
+        merged = c.get("/api/summary", headers=AUTH).json()
+        assert merged["source"] == "all" and merged["invoices"] == 1 + summary["invoices"]
+        assert c.get("/api/commitments?source=bogus", headers=AUTH).status_code == 400
+
+    def test_detail_and_writes_route_to_the_owning_ledger(self, world):
+        store, c = self._two_ledger_client(world)
+        sim_invoice = c.get("/api/invoices?source=simulation", headers=AUTH).json()[0]["id"]
+        detail = c.get(f"/api/invoices/{sim_invoice}", headers=AUTH).json()
+        assert detail["source"] == "simulation" and detail["invoice"]["source"] == "simulation"
+        # replies never act on simulated records through the live agent
+        assert c.post("/inbound/reply", json={"invoice_id": sim_invoice, "text": "will pay tomorrow"},
+                      headers=AUTH).status_code == 409
+        cid = c.get("/api/commitments?source=simulation", headers=AUTH).json()[0]["id"]
+        one = c.get(f"/api/commitments/{cid}", headers=AUTH).json()
+        assert one["source"] == "simulation" and one["chain"]["id"] == cid and one["audit_chain"]["verified"]
+        assert c.get("/api/commitments/cmt_none", headers=AUTH).json()["detail"] == \
+            "No matching commitment in current data source"

@@ -134,9 +134,13 @@ def commitment_integrity(store: Store, commitment: PaymentCommitment,
             "notes": instrument.payload.get("notes") if instrument else None,
             "reference_id": instrument.payload.get("reference_id") if instrument else None,
             "sent": commitment.instrument_sent,
-            "mode": instrument_mode(commitment.instrument_id, commitment.payment_url),
-            "failed": commitment.instrument_id is None and rail_failure is not None,
-            "failure_reason": rail_failure.payload.get("error") if rail_failure else None,
+            "mode": (commitment.instrument_mode.value if commitment.instrument_mode
+                     else instrument_mode(commitment.instrument_id, commitment.payment_url)),
+            "origin": commitment.origin.value if commitment.origin else None,
+            "failed": commitment.instrument_failed or (
+                commitment.instrument_id is None and rail_failure is not None),
+            "failure_reason": commitment.instrument_failure or (
+                rail_failure.payload.get("error") if rail_failure else None),
             "event": _event_ref(instrument),
             "confirmation": _event_ref(confirmation),
         },

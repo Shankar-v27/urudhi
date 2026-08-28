@@ -1,7 +1,7 @@
 /** Shared primitives: cards, badges, drawer, load states, and the inline-SVG chart forms. */
 
 import { ReactNode, useEffect, useId, useState } from "react";
-import { ApiError, Loaded, TOKEN_KEY, storageGet, when } from "./api";
+import { ApiError, Loaded, RowSource, TOKEN_KEY, storageGet, when } from "./api";
 
 // -- tones & badges ---------------------------------------------------------
 
@@ -13,7 +13,7 @@ const STATE_TONE: Record<string, Tone> = {
   escalated: "danger", disputed: "danger", stop_contact: "neutral", closed: "neutral",
   // promises
   kept: "success", partially_kept: "warn", open: "info", broken: "danger",
-  superseded: "neutral", withdrawn: "neutral", declined: "danger",
+  superseded: "neutral", withdrawn: "warn", declined: "danger",
   // commitments
   active: "info", partially_fulfilled: "warn", fulfilled: "success", missed: "danger", cancelled: "neutral",
   // concessions
@@ -39,10 +39,10 @@ export function StatusBadge({ state, title }: { state: string; title?: string })
   return <Pill tone={toneFor(state)} upper title={title}>{stateLabel(state)}</Pill>;
 }
 
-export type Mode = "razorpay_test" | "sandbox" | "simulation" | "observed" | "persona" | "measured";
+export type Mode = "razorpay_test" | "sandbox" | "simulation" | "observed" | "persona" | "measured" | "mixed";
 const MODE_LABEL: Record<Mode, string> = {
   razorpay_test: "Razorpay Test Mode", sandbox: "Sandbox", simulation: "Simulation",
-  observed: "Observed on rails", persona: "Persona model", measured: "Measured",
+  observed: "Observed on rails", persona: "Persona model", measured: "Measured", mixed: "Mixed sources",
 };
 const MODE_TITLE: Record<Mode, string> = {
   razorpay_test: "A real Razorpay test-mode instrument; the URL is used exactly as Razorpay returned it",
@@ -51,7 +51,20 @@ const MODE_TITLE: Record<Mode, string> = {
   observed: "Counted only from payments the payment rails reported",
   persona: "Debtor behaviour comes from the persona model in the simulator",
   measured: "Measured on labelled replies",
+  mixed: "Live test-mode records and simulation records merged; every row is labelled with its ledger",
 };
+
+const SOURCE_BADGE: Record<RowSource, { label: string; title: string }> = {
+  live_test: { label: "Live Test", title: "From the live ledger: real Razorpay test-mode instruments, payments observed via signed webhook" },
+  simulation: { label: "Simulation", title: "From the simulation ledger: persona-model debtors, sandbox rail, webhook-shaped events" },
+};
+
+/** Row-level provenance: which ledger a record came from. Emerald outline for live test, teal for simulation. */
+export function SourceBadge({ source, title }: { source: RowSource | null | undefined; title?: string }) {
+  if (!source) return <span className="source-badge unknown" title="The API did not label this row">Unlabelled</span>;
+  const b = SOURCE_BADGE[source] ?? { label: source, title: "" };
+  return <span className={`source-badge ${source}`} title={title ?? b.title}>{b.label}</span>;
+}
 
 /** Provenance badge: where a number or instrument came from. */
 export function ModeBadge({ mode, label, title }: { mode: Mode; label?: string; title?: string }) {

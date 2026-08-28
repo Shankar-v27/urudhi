@@ -51,6 +51,7 @@ from urudhi.agent.brain import (
     MessageContext,
     ReplyInterpretation,
 )
+from urudhi.agent.instruments import issue_instrument
 from urudhi.agent.intervention import (
     CONTACTING,
     DecisionContext,
@@ -79,7 +80,6 @@ from urudhi.ledger.models import (
     ConcessionState,
     ConcessionType,
     Debtor,
-    InstrumentType,
     Invoice,
     InvoiceState,
     PaymentCommitment,
@@ -103,7 +103,7 @@ from urudhi.ledger.transitions import (
     withdraw_concession,
 )
 from urudhi.observability import counters, get_logger
-from urudhi.rails.razorpay_client import RailsClient
+from urudhi.rails.razorpay_client import RailsClient, origin_for_rail
 from urudhi.store import Store
 
 log = get_logger("urudhi.loop")
@@ -735,46 +735,20 @@ class RecoveryAgent:
         n = len(self._store.commitments_for(invoice.id)) + 1
         cid = f"cmt_{invoice.id}_{n}"
         due_at = datetime.combine(due_on, time(23, 59, 59), tzinfo=ZoneInfo(self._config.timezone))
-        instrument_type = instrument_id = payment_url = None
-        link = None
-        if self._rails is not None:
-            try:
-                link = self._rails.create_payment_link(
-                    amount=amount,
-                    description=f"Invoice {invoice.number} — {format_inr(amount)} by {due_on:%d %b %Y}",
-                    invoice_id=invoice.id, commitment_id=cid, customer_name=debtor.name,
-                    customer_email=debtor.email, customer_contact=debtor.phone,
-                    expire_by=int(due_at.timestamp()),
-                )
-            except Exception as error:
-                # The commitment is what policy accepted; the instrument is how it is paid.
-                # A rail failure is audited and the commitment stands without a link —
-                # money can still arrive on the invoice and be matched to it.
-                self._rail_failed(invoice, debtor, now, "commitment_link", amount, error, cid)
-                link = None
-        if link is not None:
-            instrument_type, instrument_id, payment_url = (
-                InstrumentType.PAYMENT_LINK, link.get("id"), link.get("short_url"),
-            )
-            self._store.append_event(
-                at=now, actor=Actor.RAILS, kind=EventKind.PAYMENT_INSTRUMENT_CREATED,
-                invoice_id=invoice.id, debtor_id=debtor.id,
-                payload={"commitment_id": cid, "instrument_type": instrument_type,
-                         "instrument_id": instrument_id, "payment_url": payment_url,
-                         "amount": amount, "expire_by": due_at.isoformat(),
-                         "notes": link.get("notes"), "reference_id": link.get("reference_id")},
-            )
-            counters.inc("commitment.instrument_created")
-
         commitment = PaymentCommitment(
             id=cid, invoice_id=invoice.id, debtor_id=debtor.id,
             promise_id=promise.id if promise else None,
             concession_id=concession.id if concession else None,
             installment_index=installment_index, source=source,
             committed_amount=amount, due_on=due_on, due_at=due_at,
-            instrument_type=instrument_type, instrument_id=instrument_id, payment_url=payment_url,
+            origin=origin_for_rail(self._rails),
             created_at=now, accepted_at=now if promise is not None else None,
             confidence=confidence, evidence=evidence, rationale=verdict.reason,
+        )
+        if self._rails is not None:
+            commitment = issue_instrument(self._store, self._rails, invoice, debtor, commitment, now)
+        instrument_type, instrument_id, payment_url = (
+            commitment.instrument_type, commitment.instrument_id, commitment.payment_url,
         )
         commitment, superseded = open_commitment(
             invoice, commitment, self._store.live_commitments_for(invoice.id)

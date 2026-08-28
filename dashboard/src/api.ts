@@ -4,6 +4,26 @@ import { useCallback, useEffect, useState } from "react";
 
 export const TOKEN_KEY = "urudhi.token";
 export const OPERATOR_KEY = "urudhi.operator";
+export const SOURCE_KEY = "urudhi.source";
+
+// -- data sources -----------------------------------------------------------
+// The API serves two ledgers as one product view. `all` merges them; every row says which ledger it came from.
+
+/** What the operator asked to see. */
+export type DataSource = "all" | "live_test" | "simulation";
+/** Which ledger a row was read from. */
+export type RowSource = "live_test" | "simulation";
+
+export const DATA_SOURCES: DataSource[] = ["all", "live_test", "simulation"];
+export const SOURCE_LABEL: Record<DataSource, string> = { all: "All", live_test: "Live Test", simulation: "Simulation" };
+
+export function isDataSource(value: unknown): value is DataSource {
+  return typeof value === "string" && (DATA_SOURCES as string[]).includes(value);
+}
+
+function withSource(path: string, source: DataSource): string {
+  return `${path}${path.includes("?") ? "&" : "?"}source=${source}`;
+}
 
 export function storageGet(key: string): string {
   try {
@@ -26,6 +46,7 @@ export function storageSet(key: string, value: string): void {
 
 export interface Invoice {
   id: string;
+  source?: RowSource;
   debtor_id: string;
   number: string;
   amount: number;
@@ -51,6 +72,12 @@ export interface Promise_ {
   confidence: number;
   state: string;
   resolved_at: string | null;
+  source?: RowSource;
+  invoice_number?: string | null;
+  /** The commitment policy made of this promise, when one exists. */
+  commitment_id?: string | null;
+  commitment_state?: CommitmentState | null;
+  commitment_received?: number | null;
 }
 
 export interface Installment {
@@ -60,6 +87,7 @@ export interface Installment {
 
 export interface Concession {
   id: string;
+  source?: RowSource;
   invoice_id: string;
   debtor_id: string;
   type: string;
@@ -93,7 +121,10 @@ export interface Payment {
 // (exact amount, exact deadline, a Razorpay Payment Link tagged with the id).
 // Payment = what the rails verified. The shapes below keep those three apart.
 
-export type CommitmentSource = "promise" | "concession" | "installment" | "human";
+/** What opened the commitment (a promise, a concession, an installment of one, or a human arrangement). */
+export type CommitmentOrigin = "promise" | "concession" | "installment" | "human";
+/** @deprecated name kept for older imports; the row field is now `origin`, `source` is the ledger. */
+export type CommitmentSource = CommitmentOrigin;
 export type CommitmentState =
   | "active" | "partially_fulfilled" | "fulfilled" | "missed" | "cancelled" | "superseded";
 export type MatchedBy = "instrument" | "invoice" | "instrument-late" | null;
@@ -113,7 +144,15 @@ export interface Commitment {
   promise_id: string | null;
   concession_id: string | null;
   installment_index: number | null;
-  source: CommitmentSource;
+  /** Which ledger this row came from. */
+  source: RowSource;
+  /** What opened it; informational, may be null on older rows. */
+  origin?: CommitmentOrigin | null;
+  /** Informational only: where the rail said the instrument came from. */
+  rail_origin?: string | null;
+  /** Which rail issued the instrument (same vocabulary as `instrument_mode`). */
+  rail?: InstrumentMode;
+  debtor_name?: string | null;
   committed_amount: number;
   currency: string;
   due_on: string;
@@ -121,11 +160,14 @@ export interface Commitment {
   state: CommitmentState;
   instrument_type: "payment_link" | null;
   instrument_id: string | null;
+  /** The rail's own customer URL, verbatim. Only ever opened when `instrument_mode === "razorpay_test"`. */
   payment_url: string | null;
-  /** Absent on API builds that predate instrument modes; treated as unknown, never as a link. */
+  /** Explicit and persisted by the API; absent only on builds that predate it (then never a link). */
   instrument_mode?: InstrumentMode;
   /** True when the rail refused to issue an instrument (a `rail_failed` audit event exists). */
   instrument_failed?: boolean | null;
+  /** The rail's error text when `instrument_failed`; empty otherwise. */
+  instrument_failure?: string | null;
   instrument_sent: boolean;
   reminder_sent: boolean;
   created_at: string;
@@ -197,7 +239,8 @@ export interface RailRow {
 export interface CommitmentChain {
   id: string;
   state: CommitmentState;
-  source: CommitmentSource;
+  /** What opened the commitment (promise / concession / installment / human). */
+  source: CommitmentOrigin;
   invoice_id: string;
   installment_index: number | null;
   committed_amount: number;
@@ -225,7 +268,7 @@ export interface CommitmentChain {
     /** Razorpay `notes` object (invoice_id, commitment_id) as issued; a string on very old rows. */
     notes: Record<string, string> | string | null;
     reference_id: string | null; sent: boolean;
-    mode?: InstrumentMode; failed?: boolean; failure_reason?: string | null;
+    mode?: InstrumentMode; origin?: string | null; failed?: boolean; failure_reason?: string | null;
     event: EventRef | null; confirmation: EventRef | null;
   };
   rail: RailRow[];
@@ -254,6 +297,23 @@ export interface InvoiceCommitments {
   blocked: BlockedCommitment[];
 }
 
+export interface Debtor {
+  id: string; name: string; contact_name: string; phone: string; email: string;
+  preferred_channel: string; language: string;
+}
+
+export interface ChainStatus { verified: boolean; events?: number; error?: string }
+
+/** `GET /api/commitments/{id}` — one commitment with its invoice, debtor and full provenance chain, from either ledger. */
+export interface CommitmentDetail {
+  source: RowSource;
+  commitment: Commitment;
+  invoice: Invoice;
+  debtor: Debtor;
+  chain: CommitmentChain;
+  audit_chain: ChainStatus;
+}
+
 export interface CommitmentSummary {
   created: number;
   active: number;
@@ -273,6 +333,21 @@ export interface CommitmentSummary {
   messages_total?: number;
   nudges?: number;
   exact_instrument_matched_paise: number;
+  /** How many instruments each rail issued. */
+  instruments_razorpay_test?: number;
+  instruments_sandbox?: number;
+}
+
+/** What produced the numbers in a summary: which brain, which rail, how payments were observed. */
+export interface SummaryContext {
+  source: DataSource;
+  brain: string;
+  rail: string;
+  payments_observed: number;
+  audit_events: number;
+  chain_verified: boolean;
+  /** Human-readable provenance, e.g. "Razorpay Test Mode · observed via signed webhook". */
+  provenance: string;
 }
 
 export interface AuditEvent {
@@ -285,7 +360,9 @@ export interface AuditEvent {
   hash: string;
 }
 
-export interface Summary {
+/** One ledger's slice of the summary (also the whole summary when a single source is selected). */
+export interface SourceSummary {
+  source: RowSource;
   invoices: number;
   outstanding_paise: number;
   recovered_paise: number;
@@ -293,9 +370,28 @@ export interface Summary {
   by_state: Record<string, number>;
   messages_sent: number;
   by_intervention: Record<string, number>;
+  commitments: CommitmentSummary;
+  context: SummaryContext;
+}
+
+export interface Summary {
+  source?: DataSource;
+  sources?: RowSource[];
+  /** Present when `source=all`: the per-ledger summaries the totals were merged from. */
+  by_source?: SourceSummary[];
+  invoices: number;
+  outstanding_paise: number;
+  recovered_paise: number;
+  waived_paise: number;
+  by_state: Record<string, number>;
+  messages_sent: number;
+  by_intervention: Record<string, number>;
+  /** The running process's brain / transport / rails — not necessarily what produced a simulation ledger. */
   brain: string;
   transport: string;
+  rails?: string;
   commitments: CommitmentSummary;
+  context?: SummaryContext;
 }
 
 export interface TimelinePoint {
@@ -303,21 +399,36 @@ export interface TimelinePoint {
   recovered_cumulative: number;
   recovered: number;
   messages: number;
+  source?: RowSource;
 }
 
 export interface Timeline {
   series: TimelinePoint[];
+  by_source?: Partial<Record<RowSource, TimelinePoint[]>>;
+}
+
+/** One ledger as reported by /health. `brain` is the brain that produced a simulation ledger (e.g. "mock"), else null. */
+export interface Ledger {
+  source: RowSource;
+  db: string;
+  invoices: number;
+  audit_chain: ChainStatus;
+  brain: string | null;
 }
 
 export interface Health {
   status: string;
   version: string;
+  /** The brain the running process uses for live traffic. */
   brain: string;
   transport: string;
+  /** "razorpay_test" | "sandbox" (older builds: "razorpay-test" | "fake"). */
   rails: string;
   policy_timezone: string;
   invoices: number;
-  audit_chain: { verified: boolean; events?: number; error?: string };
+  audit_chain: ChainStatus;
+  sources?: RowSource[];
+  ledgers?: Ledger[];
   counters: Record<string, number>;
 }
 
@@ -379,11 +490,9 @@ export interface Explain {
 }
 
 export interface InvoiceDetail {
+  source?: RowSource;
   invoice: Invoice;
-  debtor: {
-    id: string; name: string; contact_name: string; phone: string; email: string;
-    preferred_channel: string; language: string;
-  };
+  debtor: Debtor;
   promises: Promise_[];
   commitments: Commitment[];
   concessions: Concession[];
@@ -393,7 +502,8 @@ export interface InvoiceDetail {
 }
 
 export interface Audit {
-  chain: { verified: boolean; events?: number; error?: string };
+  chain: ChainStatus;
+  chains?: Partial<Record<RowSource, ChainStatus>>;
   total: number;
   events: AuditEvent[];
 }
@@ -423,6 +533,8 @@ export interface HumanResult {
 export interface Escalation {
   invoice_id: string;
   number: string;
+  source?: RowSource;
+  debtor_name?: string | null;
   state: string;
   balance: number;
   amount_paid: number;
@@ -518,6 +630,8 @@ export interface SensitivityRow {
 }
 
 export interface Experiment {
+  /** The experiment is always a simulation artefact. */
+  source?: "simulation";
   generated_by: string;
   seed: number;
   days: number;
@@ -637,22 +751,25 @@ const get = <T,>(path: string) => request<T>(path);
 const post = <T,>(path: string, body: unknown) =>
   request<T>(path, { method: "POST", body: JSON.stringify(body) });
 
+/** Every list endpoint takes the selected data source; detail endpoints look across both ledgers. */
 export const api = {
   health: () => get<Health>("/health"),
-  summary: () => get<Summary>("/api/summary"),
-  timeline: () => get<Timeline>("/api/timeline"),
-  invoices: () => get<Invoice[]>("/api/invoices"),
+  summary: (source: DataSource = "all") => get<Summary>(withSource("/api/summary", source)),
+  timeline: (source: DataSource = "all") => get<Timeline>(withSource("/api/timeline", source)),
+  invoices: (source: DataSource = "all") => get<Invoice[]>(withSource("/api/invoices", source)),
   invoice: (id: string) => get<InvoiceDetail>(`/api/invoices/${encodeURIComponent(id)}`),
   explain: (id: string) => get<Explain>(`/api/invoices/${encodeURIComponent(id)}/explain`),
   human: (id: string, body: HumanRequest) =>
     post<HumanResult>(`/api/invoices/${encodeURIComponent(id)}/human`, body),
-  escalations: () => get<Escalation[]>("/api/escalations"),
-  promises: () => get<Promise_[]>("/api/promises"),
-  commitments: () => get<Commitment[]>("/api/commitments"),
+  escalations: (source: DataSource = "all") => get<Escalation[]>(withSource("/api/escalations", source)),
+  promises: (source: DataSource = "all") => get<Promise_[]>(withSource("/api/promises", source)),
+  commitments: (source: DataSource = "all") => get<Commitment[]>(withSource("/api/commitments", source)),
+  /** One commitment from whichever ledger holds it; 404 "No matching commitment in current data source" otherwise. */
+  commitment: (id: string) => get<CommitmentDetail>(`/api/commitments/${encodeURIComponent(id)}`),
   invoiceCommitments: (id: string) =>
     get<InvoiceCommitments>(`/api/invoices/${encodeURIComponent(id)}/commitments`),
-  concessions: () => get<Concession[]>("/api/concessions"),
-  audit: () => get<Audit>("/api/audit?limit=500"),
+  concessions: (source: DataSource = "all") => get<Concession[]>(withSource("/api/concessions", source)),
+  audit: (source: DataSource = "all") => get<Audit>(withSource("/api/audit?limit=500", source)),
   experiment: () => get<Experiment>("/api/experiment"),
   replyEval: () => get<ReplyEval>("/api/reply-eval"),
 };

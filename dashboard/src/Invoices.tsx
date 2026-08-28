@@ -6,7 +6,7 @@ import {
   PolicyCheck, Promise_, api, daysUntil, inr, num, relativeDays, useLoad, when, whenIST,
 } from "./api";
 import {
-  Checklist, ConfidenceBar, Drawer, DrawerSection, EmptyState, Fact, ModeBadge, Pill, Ref, Status, StatusBadge,
+  Checklist, ConfidenceBar, Drawer, DrawerSection, EmptyState, Fact, ModeBadge, Pill, Ref, SourceBadge, Status, StatusBadge,
   TableWrap, stateLabel,
 } from "./ui";
 import { InstrumentAction, PayloadLink, factsFromCommitment } from "./components/InstrumentAction";
@@ -68,13 +68,14 @@ export function InvoicesPage({ invoices, onOpen }: { invoices: Loaded<Invoice[]>
         <button type="button" className="btn sm" onClick={invoices.reload}>Refresh</button>
       </div>
       <Status load={invoices} rows={8}>
-        {() => shown.length === 0 ? <EmptyState title="No invoices match" hint="Try a different state or search term." /> : (
+        {(all) => all.length === 0 ? <EmptyState title="No invoices in this data source" /> : shown.length === 0 ? <EmptyState title="No invoices match" hint="Try a different state or search term." /> : (
           <TableWrap>
             <table>
               <thead>
                 <tr>
                   <th>Invoice</th>
                   <th>Debtor</th>
+                  <th>Source</th>
                   <th>State</th>
                   <th className="num">Outstanding</th>
                   <th className="num">Recovered</th>
@@ -88,9 +89,10 @@ export function InvoicesPage({ invoices, onOpen }: { invoices: Loaded<Invoice[]>
                 {shown.map((invoice) => {
                   const overdue = overdueDays(invoice);
                   return (
-                    <tr key={invoice.id} className="clickable" onClick={() => onOpen(invoice.id)}>
+                    <tr key={`${invoice.source ?? ""}:${invoice.id}`} className="clickable" onClick={() => onOpen(invoice.id)}>
                       <td><b>{invoice.number}</b><span className="secondary mono">{invoice.id}</span></td>
                       <td>{invoice.debtor_name ?? <span className="muted">{invoice.debtor_id}</span>}</td>
+                      <td><SourceBadge source={invoice.source} /></td>
                       <td><StatusBadge state={invoice.state} /></td>
                       <td className="num">{inr(invoice.amount)}</td>
                       <td className="num">{inr(invoice.amount_paid)}</td>
@@ -451,7 +453,8 @@ export function InvoiceDrawer({ id, onClose, onOpenCommitment }: {
     </p>
   );
   return (
-    <Drawer eyebrow="Invoice" title={inv ? <>{inv.number}<StatusBadge state={inv.state} /></> : id} onClose={onClose} headExtra={headExtra}>
+    <Drawer eyebrow={<>Invoice{detail.data && <> · <SourceBadge source={detail.data.source ?? detail.data.invoice.source} /></>}</>}
+      title={inv ? <>{inv.number}<StatusBadge state={inv.state} /></> : id} onClose={onClose} headExtra={headExtra}>
       <Status load={detail} rows={10}>
         {({ invoice, debtor, promises, concessions, commitments, payments, events, explain }) => {
           const modes: Record<string, InstrumentMode | undefined> = {};

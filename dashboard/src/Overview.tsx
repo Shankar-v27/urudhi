@@ -1,11 +1,13 @@
 /** Overview: live KPIs, the three-arm comparison and recovery trend from the experiment, and revenue at risk. */
 
-import { useMemo } from "react";
+import { ReactNode, useMemo } from "react";
 import {
-  ArmName, Experiment, Invoice, Loaded, Summary, api, daysUntil, inr, inrShort, inrSigned, num, pct, useLoad,
+  ArmName, DataSource, Experiment, Invoice, Loaded, SOURCE_LABEL, SourceSummary, Summary, SummaryContext, api, daysUntil,
+  inr, inrShort, inrSigned, num, pct, useLoad,
 } from "./api";
+import { useSource } from "./source";
 import {
-  BarGroup, COLORS, Card, EmptyState, HBars, LineChart, MetricCard, ModeBadge, Pill, SectionHeader, Skeleton, Status,
+  BarGroup, COLORS, Card, EmptyState, HBars, LineChart, MetricCard, Mode, ModeBadge, Pill, SectionHeader, Skeleton, Status,
   stateLabel,
 } from "./ui";
 
@@ -20,33 +22,120 @@ function money0(v: number | null | undefined): string {
 
 // -- KPI row -----------------------------------------------------------------
 
-function Kpis({ summary, experiment }: { summary: Summary; experiment: Loaded<Experiment> }) {
+/** The provenance badge for a summary, from `summary.context.provenance` (mixed for `all`). */
+export function ProvenanceBadge({ context, source }: { context: SummaryContext | undefined; source: DataSource }) {
+  if (!context) return <ModeBadge mode={source === "simulation" ? "simulation" : "observed"} />;
+  const mode: Mode = context.source === "all" ? "mixed" : context.rail === "sandbox" ? "simulation" : "observed";
+  return <ModeBadge mode={mode} label={context.provenance} title={`${context.provenance} · brain ${context.brain} · rail ${context.rail} · ${num(context.payments_observed)} payments observed`} />;
+}
+
+/** Under a merged KPI: the same figure per ledger. */
+function Split({ rows, pick, format }: { rows: SourceSummary[]; pick: (s: SourceSummary) => number; format: (v: number) => string }) {
+  if (rows.length < 2) return null;
+  return (
+    <span className="split" aria-label="Per-source split">
+      {rows.map((r) => <span key={r.source}>{SOURCE_LABEL[r.source]} <b>{format(pick(r))}</b></span>)}
+    </span>
+  );
+}
+
+function Kpis({ summary, experiment, source }: { summary: Summary; experiment: Loaded<Experiment | null>; source: DataSource }) {
   const rate = summary.outstanding_paise > 0 ? summary.recovered_paise / summary.outstanding_paise : null;
   const net = summary.recovered_paise - summary.waived_paise;
   const x = experiment.data;
   const c = summary.commitments;
   const nudges = c.nudges ?? null;
-  const perNudge = c.recovered_per_attempt_paise ?? x?.arms.urudhi?.recovered_per_contact_attempt_paise ?? null;
+  const simulationAllowed = source !== "live_test";
+  const perNudge = c.recovered_per_attempt_paise ?? (simulationAllowed ? x?.arms.urudhi?.recovered_per_contact_attempt_paise ?? null : null);
   const perNudgeSimulated = c.recovered_per_attempt_paise === null || c.recovered_per_attempt_paise === undefined;
+  const provenance = <ProvenanceBadge context={summary.context} source={source} />;
+  const split = source === "all" && summary.by_source ? summary.by_source : [];
+  const withSplit = (text: ReactNode, pick: (s: SourceSummary) => number) => (
+    <>
+      <span style={{ display: "block" }}>{text}</span>
+      <Split rows={split} pick={pick} format={inrShort} />
+    </>
+  );
   return (
     <div className="kpis">
-      <MetricCard label="Amount at Risk" value={inrShort(summary.outstanding_paise)} exact={inr(summary.outstanding_paise)}
-        sub={`${num(summary.invoices)} invoices`} />
-      <MetricCard label="Recovered" badge={<ModeBadge mode="observed" />} tone="accent"
+      <MetricCard label="Amount at Risk" badge={provenance} value={inrShort(summary.outstanding_paise)} exact={inr(summary.outstanding_paise)}
+        sub={withSplit(`${num(summary.invoices)} invoices`, (s) => s.outstanding_paise)} />
+      <MetricCard label="Recovered" badge={provenance} tone="accent"
         value={inrShort(summary.recovered_paise)} exact={inr(summary.recovered_paise)}
-        sub="Observed on payment rails" />
-      <MetricCard label="Recovery Rate" value={pct(rate)} exact={rate === null ? undefined : `${inr(summary.recovered_paise)} of ${inr(summary.outstanding_paise)}`}
+        sub={withSplit(summary.context ? `${num(summary.context.payments_observed)} payments observed` : "Observed on payment rails", (s) => s.recovered_paise)} />
+      <MetricCard label="Recovery Rate" badge={provenance} value={pct(rate)} exact={rate === null ? undefined : `${inr(summary.recovered_paise)} of ${inr(summary.outstanding_paise)}`}
         sub={`${num(summary.messages_sent)} messages sent`} />
-      <MetricCard label="Net Recovered" value={inrShort(net)} exact={inr(net)}
+      <MetricCard label="Net Recovered" badge={provenance} value={inrShort(net)} exact={inr(net)}
         sub={`after ${inr(summary.waived_paise)} waived`} />
-      <MetricCard label="Recovery Uplift vs baseline" badge={<ModeBadge mode="simulation" />}
-        value={x ? inrShort(x.uplift.urudhi_vs_baseline_paise) : "—"}
-        exact={x ? inrSigned(x.uplift.urudhi_vs_baseline_paise) : undefined}
-        sub={x ? `${x.uplift.urudhi_vs_baseline_points >= 0 ? "+" : ""}${num(x.uplift.urudhi_vs_baseline_points, 1)} pts recovery rate` : experiment.error ? "no experiment report" : "loading experiment…"} />
-      <MetricCard label="Contact Efficiency" badge={perNudgeSimulated && perNudge !== null ? <ModeBadge mode="simulation" /> : undefined}
+      {simulationAllowed && (
+        <MetricCard label="Recovery Uplift vs baseline" badge={<ModeBadge mode="simulation" />}
+          value={x ? inrShort(x.uplift.urudhi_vs_baseline_paise) : "—"}
+          exact={x ? inrSigned(x.uplift.urudhi_vs_baseline_paise) : undefined}
+          sub={x ? `${x.uplift.urudhi_vs_baseline_points >= 0 ? "+" : ""}${num(x.uplift.urudhi_vs_baseline_points, 1)} pts recovery rate` : experiment.error ? "no experiment report" : "loading experiment…"} />
+      )}
+      <MetricCard label="Contact Efficiency" badge={perNudgeSimulated && perNudge !== null ? <ModeBadge mode="simulation" /> : provenance}
         value={perNudge === null ? "—" : inrShort(perNudge)} exact={perNudge === null ? undefined : inr(perNudge)}
         sub={perNudge === null ? "no nudges yet" : `₹ recovered per nudge${nudges !== null ? ` · ${num(nudges)} nudges` : ""}`} />
     </div>
+  );
+}
+
+// -- takeaway ----------------------------------------------------------------
+
+export interface Takeaway {
+  recovery: { urudhi: number; baseline: number };
+  nudges: { urudhi: number; baseline: number };
+  perContact: { urudhi: number | null; baseline: number | null };
+  /** True only when Urudhi beats the baseline on all three. */
+  wins: boolean;
+}
+
+function perContact(x: Experiment, a: ArmName): number | null {
+  const arm = x.arms[a];
+  if (!arm) return null;
+  return arm.recovered_per_contact_attempt_paise ?? (arm.contact_attempts > 0 ? Math.round(arm.recovered_paise / arm.contact_attempts) : null);
+}
+
+/** Urudhi vs the fixed-cadence baseline on recovery rate, nudges and ₹ per contact; null when either arm is missing. */
+export function takeaway(x: Experiment): Takeaway | null {
+  const u = x.arms.urudhi;
+  const b = x.arms.baseline;
+  if (!u || !b) return null;
+  const pu = perContact(x, "urudhi");
+  const pb = perContact(x, "baseline");
+  const wins = u.recovery_rate > b.recovery_rate && u.contact_attempts < b.contact_attempts && pu !== null && pb !== null && pu > pb;
+  return { recovery: { urudhi: u.recovery_rate, baseline: b.recovery_rate }, nudges: { urudhi: u.contact_attempts, baseline: b.contact_attempts }, perContact: { urudhi: pu, baseline: pb }, wins };
+}
+
+function TakeawayCard({ x }: { x: Experiment }) {
+  const t = takeaway(x);
+  if (!t) return null;
+  const pts = (t.recovery.urudhi - t.recovery.baseline) * 100;
+  return (
+    <Card className={t.wins ? "takeaway" : ""}>
+      <SectionHeader title={t.wins ? "Takeaway: more recovery · fewer nudges · better efficiency" : "Urudhi vs fixed-cadence baseline"}
+        badge={<><ModeBadge mode="simulation" /><ModeBadge mode="persona" /></>}
+        description={t.wins
+          ? "Under the persona model Urudhi recovers more of the book with fewer messages, so each contact is worth more."
+          : "The simulated arms do not agree on every axis; the figures are shown as measured."} />
+      <div className="figures">
+        <div className="figure">
+          <span>Recovery rate</span>
+          <b>{pct(t.recovery.urudhi)}</b>
+          <span className="vs">baseline {pct(t.recovery.baseline)} · {pts >= 0 ? "+" : ""}{num(pts, 1)} pts</span>
+        </div>
+        <div className="figure">
+          <span>Nudges sent</span>
+          <b>{num(t.nudges.urudhi)}</b>
+          <span className="vs">baseline {num(t.nudges.baseline)} · {t.nudges.baseline > 0 ? `${num(((t.nudges.urudhi - t.nudges.baseline) / t.nudges.baseline) * 100, 0)}%` : "—"}</span>
+        </div>
+        <div className="figure">
+          <span>₹ recovered per contact</span>
+          <b>{t.perContact.urudhi === null ? "—" : inrShort(t.perContact.urudhi)}</b>
+          <span className="vs">baseline {t.perContact.baseline === null ? "—" : inrShort(t.perContact.baseline)}</span>
+        </div>
+      </div>
+    </Card>
   );
 }
 
@@ -133,12 +222,12 @@ function Trend({ x }: { x: Experiment }) {
   );
 }
 
-function ObservedTrend() {
-  const timeline = useLoad(api.timeline);
+function ObservedTrend({ source, context }: { source: DataSource; context: SummaryContext | undefined }) {
+  const timeline = useLoad(() => api.timeline(source), [source]);
   return (
     <Card>
-      <SectionHeader title="Recovery on the rails" badge={<ModeBadge mode="observed" />}
-        description="Cumulative paise reported by the payment rails on the live ledger." />
+      <SectionHeader title="Recovery on the rails" badge={<ProvenanceBadge context={context} source={source} />}
+        description={`Cumulative paise reported by the payment rails · ${SOURCE_LABEL[source]} records.`} />
       <Status load={timeline} rows={4}>
         {(t) => (
           <LineChart title="Cumulative recovered per day, observed" labels={t.series.map((p) => p.day)}
@@ -188,8 +277,8 @@ function BucketList({ items, format }: { items: { label: string; tone: string; v
   );
 }
 
-function RevenueAtRisk({ summary, invoices }: { summary: Summary; invoices: Loaded<Invoice[]> }) {
-  const promises = useLoad(api.promises);
+function RevenueAtRisk({ summary, invoices, source }: { summary: Summary; invoices: Loaded<Invoice[]>; source: DataSource }) {
+  const promises = useLoad(() => api.promises(source), [source]);
   const rows = invoices.data ?? [];
   const byState = useMemo(() => {
     const m = new Map<string, { count: number; paise: number }>();
@@ -214,7 +303,7 @@ function RevenueAtRisk({ summary, invoices }: { summary: Summary; invoices: Load
 
   return (
     <Card>
-      <SectionHeader title="Revenue at risk" badge={<ModeBadge mode="observed" label="Live ledger" title="Computed from the live invoices, promises and summary endpoints" />}
+      <SectionHeader title="Revenue at risk" badge={<ProvenanceBadge context={summary.context} source={source} />}
         description="Where the outstanding balance sits right now: by invoice state, by promise, and by how long it has been overdue." />
       <div className="kpis" style={{ marginBottom: 16 }}>
         <MetricCard label="Open balance" size="md" value={inrShort(outstandingBalance)} exact={inr(outstandingBalance)}
@@ -253,8 +342,13 @@ function RevenueAtRisk({ summary, invoices }: { summary: Summary; invoices: Load
 
 // -- page ------------------------------------------------------------------------
 
+export const BENCHMARK_NOTE = "Benchmark comparison is a simulation artefact; switch to Simulation or All to see it";
+
 export function Overview({ summary, invoices }: { summary: Loaded<Summary>; invoices: Loaded<Invoice[]> }) {
-  const experiment = useLoad(api.experiment);
+  const { source } = useSource();
+  const simulationAllowed = source !== "live_test";
+  // The experiment is a simulation artefact; it is not even fetched for the Live Test view.
+  const experiment = useLoad<Experiment | null>(() => (simulationAllowed ? api.experiment() : Promise.resolve(null)), [simulationAllowed]);
   const missing = (
     <Card>
       <EmptyState title="No experiment report yet"
@@ -262,17 +356,30 @@ export function Overview({ summary, invoices }: { summary: Loaded<Summary>; invo
         command={SIM_COMMAND} />
     </Card>
   );
+  const context = summary.data?.context;
+  const brainLine = context ? `brain ${context.brain} · rail ${context.rail}` : summary.data ? `brain ${summary.data.brain} · ${summary.data.transport}` : null;
   return (
     <div className="stack">
       <div>
-        <div className="page-title"><h1>Overview</h1>{summary.data && <Pill tone="outline">brain {summary.data.brain} · {summary.data.transport}</Pill>}</div>
+        <div className="page-title">
+          <h1>Overview</h1>
+          {brainLine && <Pill tone="outline">{brainLine}</Pill>}
+          {context && <ProvenanceBadge context={context} source={source} />}
+        </div>
         <p className="page-desc">Recovered means money the payment rails reported. Uplift and efficiency comparisons come from the simulated experiment and are labelled as such.</p>
-        <Status load={summary} rows={3}>{(s) => <Kpis summary={s} experiment={experiment} />}</Status>
+        <Status load={summary} rows={3}>{(s) => <Kpis summary={s} experiment={experiment} source={source} />}</Status>
       </div>
-      <Status load={experiment} notFound={missing} rows={6}>{(x) => <ArmComparison x={x} />}</Status>
-      <Status load={experiment} notFound={null} rows={4}>{(x) => <Trend x={x} />}</Status>
-      <ObservedTrend />
-      <Status load={summary} rows={3}>{(s) => <RevenueAtRisk summary={s} invoices={invoices} />}</Status>
+      {simulationAllowed ? (
+        <>
+          <Status load={experiment} notFound={null} rows={3}>{(x) => (x ? <TakeawayCard x={x} /> : null)}</Status>
+          <Status load={experiment} notFound={missing} rows={6}>{(x) => (x ? <ArmComparison x={x} /> : null)}</Status>
+          <Status load={experiment} notFound={null} rows={4}>{(x) => (x ? <Trend x={x} /> : null)}</Status>
+        </>
+      ) : (
+        <p className="note" role="note"><ModeBadge mode="simulation" /> {BENCHMARK_NOTE}</p>
+      )}
+      <ObservedTrend source={source} context={context} />
+      <Status load={summary} rows={3}>{(s) => <RevenueAtRisk summary={s} invoices={invoices} source={source} />}</Status>
       {experiment.data && experiment.data.caveats.length > 0 && (
         <details className="caveats">
           <summary>What the simulated numbers are (and aren't)</summary>

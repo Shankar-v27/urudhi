@@ -475,6 +475,11 @@ class Store:
         rows = self._rows("SELECT data FROM audit_events WHERE kind = ? ORDER BY seq", (kind.value,))
         return [AuditEvent.model_validate(json.loads(r[0])) for r in rows]
 
+    def origin(self) -> str:
+        """``simulation`` if the batch runner wrote this ledger (RUN_STARTED), else ``live_test``."""
+        row = self._row("SELECT 1 FROM audit_events WHERE kind = ? LIMIT 1", (EventKind.RUN_STARTED.value,))
+        return "simulation" if row else "live_test"
+
     def audit_count(self) -> int:
         return self._row("SELECT COUNT(*) FROM audit_events")[0]
 

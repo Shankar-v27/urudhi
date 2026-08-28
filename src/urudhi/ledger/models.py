@@ -201,6 +201,16 @@ class InstrumentType(enum.StrEnum):
     VIRTUAL_ACCOUNT = "virtual_account"
 
 
+class InstrumentMode(enum.StrEnum):
+    RAZORPAY_TEST = "razorpay_test"   # issued by Razorpay's test-mode API; the URL is theirs
+    SANDBOX = "sandbox"               # issued by the fake rail; no checkout exists anywhere
+
+
+class RecordOrigin(enum.StrEnum):
+    LIVE_TEST = "live_test"           # created against Razorpay test mode by the real app
+    SIMULATION = "simulation"         # created by the synthetic batch runner
+
+
 class PaymentCommitment(BaseModel):
     """What Urudhi *accepted* as a bounded, executable recovery arrangement.
 
@@ -230,7 +240,11 @@ class PaymentCommitment(BaseModel):
     state: CommitmentState = CommitmentState.ACTIVE
     instrument_type: InstrumentType | None = None
     instrument_id: str | None = None
-    payment_url: str | None = None
+    payment_url: str | None = None        # the rail's own customer-facing URL, verbatim
+    instrument_mode: InstrumentMode | None = None  # explicit: which rail issued it
+    instrument_failed: bool = False       # the rail refused; nothing was issued
+    instrument_failure: str = ""
+    origin: RecordOrigin | None = None    # live_test / simulation — set when created
     instrument_sent: bool = False         # the debtor has been told about the instrument
     reminder_sent: bool = False
     created_at: datetime

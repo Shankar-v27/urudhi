@@ -23,6 +23,8 @@ SUPPORTED_CURRENCY = "INR"
 class RailsClient(Protocol):
     """The surface Urudhi needs from a payment rail."""
 
+    mode: str  # "razorpay_test" | "sandbox" — explicit, persisted on every instrument
+
     def create_payment_link(self, *, amount: int, description: str, invoice_id: str,
                             customer_name: str, customer_email: str,
                             customer_contact: str, expire_by: int | None = None,
@@ -38,6 +40,8 @@ class RailsClient(Protocol):
 
 class RazorpayRails:
     """Live test-mode implementation over the official SDK."""
+
+    mode = "razorpay_test"
 
     def __init__(self, key_id: str, key_secret: str) -> None:
         import razorpay
@@ -92,6 +96,8 @@ class FakeRails:
     mistaken for — or accidentally opened as — a real Razorpay checkout.
     """
 
+    mode = "sandbox"
+
     def __init__(self) -> None:
         self.links: list[dict[str, Any]] = []
         self.virtual_accounts: list[dict[str, Any]] = []
@@ -123,6 +129,12 @@ class FakeRails:
 
 
 FAKE_INSTRUMENT_PREFIX = "plink_fake_"
+RAIL_ORIGIN = {"razorpay_test": "live_test", "sandbox": "simulation"}
+
+
+def origin_for_rail(rails: Any) -> str:
+    """Records created through Razorpay test mode are live_test; anything else is simulation."""
+    return RAIL_ORIGIN.get(getattr(rails, "mode", ""), "simulation")
 
 
 def instrument_mode(instrument_id: str | None, payment_url: str | None = None) -> str | None:

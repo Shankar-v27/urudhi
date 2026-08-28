@@ -263,6 +263,22 @@ intent accuracy, promise precision/recall, amount and date extraction,
 spurious extractions and fallback rate. This is the evidence for the only
 place the LLM is used: the language boundary.
 
+## Two ledgers, one product view
+
+The API (`api/app.py`) serves a **primary ledger** (live test-mode; the
+webhook receiver writes here) and, optionally, the **simulation ledger** the
+batch runner produced. They stay separate files; the API labels every row
+with `source` from the ledger it lives in and accepts
+`?source=all|live_test|simulation`. A commitment additionally persists the
+rail that issued its instrument (`instrument_mode`: `razorpay_test` or
+`sandbox`) and whether issuing failed — the dashboard never infers this from
+a URL. `FakeRails` issues instruments under a reserved non-resolving host so
+a sandbox link can never be mistaken for a Razorpay checkout; `RazorpayRails`
+stores Razorpay's returned `short_url` verbatim. Real instruments are issued
+only through `agent/instruments.py` — from the loop at commitment time, or
+later by `python -m urudhi.provision` for selected commitments (idempotent;
+refuses to convert sandbox records; records refusals as instrument failures).
+
 ## Runtime surfaces
 
 | surface | notes |
@@ -270,7 +286,7 @@ place the LLM is used: the language boundary.
 | `POST /webhooks/razorpay` | signed rail events; the only write path for money |
 | `POST /inbound/email`, `/inbound/reply` | debtor replies into the brain (bearer token) |
 | `POST /api/run/tick` | one scheduler tick: expire commitments, chase by priority |
-| `GET /api/*` | ledger, promises, commitments (+ per-invoice integrity chains), concessions, escalations, explain, audit, timeline, experiment, reply-eval — bearer token, contact details masked |
+| `GET /api/*` | ledger, promises, commitments (+ `/api/commitments/{id}` with its integrity chain, and per-invoice chains), concessions, escalations, explain, audit, timeline, experiment, reply-eval — bearer token, contact details masked, `?source=` on every list |
 | `POST /api/invoices/{id}/human` | acknowledge · note · **arrange** (amount + due date → policy-checked commitment) · release · close |
 | `GET /health` | brain / transport / rails mode, chain status, counters |
 

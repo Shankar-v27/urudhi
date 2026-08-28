@@ -66,7 +66,8 @@ export function deriveInstrument(f: InstrumentFacts, now: number = Date.now()): 
 export function factsFromCommitment(c: Commitment): InstrumentFacts {
   return {
     state: c.state, instrument_id: c.instrument_id, payment_url: c.payment_url,
-    instrument_mode: c.instrument_mode, instrument_failed: c.instrument_failed ?? false, due_at: c.due_at,
+    instrument_mode: c.instrument_mode, instrument_failed: c.instrument_failed ?? false,
+    failure_reason: c.instrument_failure || null, due_at: c.due_at,
   };
 }
 
@@ -96,7 +97,7 @@ export function InstrumentAction({ facts, now, compact = false }: { facts: Instr
       );
     case "failed":
       return (
-        <span className="instrument">
+        <span className="instrument" title={view.reason ?? undefined}>
           <Pill tone="danger" title={view.reason ?? "The payment rail refused to issue an instrument"}>Instrument failed</Pill>
           {!compact && view.reason && <span className="note">{view.reason}</span>}
         </span>
@@ -105,7 +106,7 @@ export function InstrumentAction({ facts, now, compact = false }: { facts: Instr
       return <span className="instrument"><Pill tone="neutral">Not issued</Pill></span>;
     case "sandbox":
       return (
-        <span className="instrument">
+        <span className="instrument" title="Simulation only — no Razorpay checkout exists">
           <Pill tone="info" title="Simulation only — no Razorpay checkout exists">Sandbox instrument</Pill>
           {!compact && view.id && <span className="url">{view.id}</span>}
         </span>

@@ -5,9 +5,10 @@ import {
   ApiError, Escalation, EvalFailure, EvalSummary, HumanRequest, Invoice, Loaded, OPERATOR_KEY, ReplyEval, Summary, api,
   inr, inrShort, num, pct, relativeDays, storageGet, storageSet, useLoad, when,
 } from "./api";
+import { useSource } from "./source";
 import {
   BarGroup, COLORS, Card, Drawer, DrawerSection, EmptyState, Fact, HBars, MetricCard, ModeBadge, Pill, SectionHeader,
-  Status, StatusBadge, TableWrap, stateLabel,
+  SourceBadge, Status, StatusBadge, TableWrap, stateLabel,
 } from "./ui";
 
 // -- escalations --------------------------------------------------------------
@@ -55,7 +56,7 @@ function ResolutionDrawer({ row, debtor, operator, busy, outcome, onAct, onClose
   const last = row.last_commitment;
   const disabled = busy || !operator;
   return (
-    <Drawer narrow eyebrow={<>Escalation · {row.number}</>} onClose={onClose}
+    <Drawer narrow eyebrow={<>Escalation · {row.number} · <SourceBadge source={row.source} /></>} onClose={onClose}
       title={<>{debtor ?? row.number}<StatusBadge state={row.state} /></>}>
       <DrawerSection title="Position">
         <div className="facts">
@@ -152,17 +153,20 @@ function ResolutionDrawer({ row, debtor, operator, busy, outcome, onAct, onClose
 export function Escalations({ invoices, summary, selectedId, onSelect }: {
   invoices: Loaded<Invoice[]>; summary: Loaded<Summary>; selectedId: string | null; onSelect: (id: string | null) => void;
 }) {
-  const queue = useLoad(api.escalations);
+  const { source } = useSource();
+  const queue = useLoad(() => api.escalations(source), [source]);
   const [operator, setOperatorState] = useState(() => storageGet(OPERATOR_KEY));
   const [busy, setBusy] = useState<string | null>(null);
   const [outcomes, setOutcomes] = useState<Record<string, Outcome>>({});
   const [kind, setKind] = useState<"all" | "disputed" | "broken" | "attempts">("all");
 
+  // Rows carry `debtor_name`; the invoice list is only a fallback for older API builds.
   const debtors = useMemo(() => {
     const m: Record<string, string> = {};
     for (const i of invoices.data ?? []) if (i.debtor_name) m[i.id] = i.debtor_name;
+    for (const r of queue.data ?? []) if (r.debtor_name) m[r.invoice_id] = r.debtor_name;
     return m;
-  }, [invoices.data]);
+  }, [invoices.data, queue.data]);
 
   const setOperator = (value: string) => {
     setOperatorState(value);
@@ -220,7 +224,7 @@ export function Escalations({ invoices, summary, selectedId, onSelect }: {
         <button type="button" className="btn sm" onClick={queue.reload}>Refresh</button>
       </div>
       <Status load={queue} rows={6}>
-        {(all) => all.length === 0 ? <EmptyState title="Nothing is waiting on a human" hint="Escalations, disputes and exhausted contact budgets land here." /> : shown.length === 0
+        {(all) => all.length === 0 ? <EmptyState title="No escalations in this data source" hint="Escalations, disputes and exhausted contact budgets land here." /> : shown.length === 0
           ? <EmptyState title="No escalations of this kind" /> : (
           <TableWrap>
             <table>
@@ -228,6 +232,7 @@ export function Escalations({ invoices, summary, selectedId, onSelect }: {
                 <tr>
                   <th>Invoice</th>
                   <th>Debtor</th>
+                  <th>Source</th>
                   <th className="num">Balance</th>
                   <th>Reason</th>
                   <th>Promise / commitment history</th>
@@ -242,7 +247,8 @@ export function Escalations({ invoices, summary, selectedId, onSelect }: {
                   return (
                     <tr key={row.invoice_id} className={`clickable ${selectedId === row.invoice_id ? "selected" : ""}`} onClick={() => onSelect(row.invoice_id)}>
                       <td><b>{row.number}</b><span className="secondary"><StatusBadge state={row.state} /></span></td>
-                      <td>{debtors[row.invoice_id] ?? <span className="muted">{invoices.data ? row.invoice_id : "…"}</span>}<span className="secondary">since {when(row.since)}</span></td>
+                      <td>{row.debtor_name ?? debtors[row.invoice_id] ?? <span className="muted">{invoices.data ? row.invoice_id : "…"}</span>}<span className="secondary">since {when(row.since)}</span></td>
+                      <td><SourceBadge source={row.source} /></td>
                       <td className="num money">{inr(row.balance)}</td>
                       <td className="wrap">{row.reason ?? <span className="muted">—</span>}{row.verbatim && <span className="secondary">“{row.verbatim}”</span>}</td>
                       <td className="wrap small">
@@ -297,6 +303,23 @@ const METRICS: MetricRow[] = [
   { label: "Mean seconds per reply", value: (s) => num(s.mean_seconds, 2) },
   { label: "Model", value: (s) => s.model ?? "—" },
 ];
+
+/**
+ * One line on why the LLM brain earns its place, from the measured intent accuracy of both brains.
+ * Null unless both were evaluated with a known accuracy.
+ */
+export function whyAiLine(data: ReplyEval): string | null {
+  const claude = data.claude?.intent_accuracy;
+  const mock = data.mock?.intent_accuracy;
+  if (claude === null || claude === undefined || mock === null || mock === undefined) return null;
+  const pts = (claude - mock) * 100;
+  const n = Math.min(data.claude!.items, data.mock!.items);
+  const recall = data.claude!.promise_detection.recall;
+  const mockRecall = data.mock!.promise_detection.recall;
+  const recallPart = recall !== null && mockRecall !== null ? `; it finds ${pct(recall, 0)} of real promises against ${pct(mockRecall, 0)}` : "";
+  if (pts <= 0) return `On ${num(n)} labelled replies the regex baseline reads intent correctly ${pct(mock)} of the time versus Claude's ${pct(claude)}${recallPart}.`;
+  return `Claude reads debtor intent correctly ${pct(claude)} of the time versus ${pct(mock)} for the regex baseline — ${num(pts, 1)} points better on the same ${num(n)} labelled replies${recallPart}. Mixed-language, informal replies are where rules break and where every promise-to-pay starts.`;
+}
 
 function languageBars(data: ReplyEval, present: Brain[]): BarGroup[] {
   const langs = Array.from(new Set(present.flatMap((b) => Object.keys(data[b]!.per_language))));
@@ -427,6 +450,7 @@ export function ReplyEvaluation() {
         const present = BRAINS.filter((b) => data[b]);
         const items = Math.max(...present.map((b) => data[b]!.items));
         const measured = <ModeBadge mode="measured" label={`Measured on ${num(items)} labelled replies`} />;
+        const why = whyAiLine(data);
         return (
           <div className="stack">
             <div>
@@ -435,6 +459,7 @@ export function ReplyEvaluation() {
                 Every labelled reply in <code>data/reply_eval.jsonl</code> run through each brain under a fixed context.
                 {present.length === 1 && <> Only the <b>{BRAIN_LABEL[present[0]]}</b> brain has been evaluated so far.</>}
               </p>
+              {why && <p className="note ok" role="note" style={{ marginBottom: 16 }}><b>Why AI is necessary:</b> {why}</p>}
               <div className="compare">
                 {present.map((b) => (
                   <MetricCard key={b} label={`${BRAIN_LABEL[b]} · intent accuracy`} tone={b === "claude" ? "accent" : undefined}

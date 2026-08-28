@@ -189,7 +189,7 @@ def main() -> None:
     app = create_app(
         store, webhook_secret=os.environ["RAZORPAY_WEBHOOK_SECRET"],
         api_token=os.environ.get("URUDHI_API_TOKEN", ""), agent=agent, policy=policy,
-        brain_name=agent.brain_name, transport_mode=f"email:{outbox.mode}", rails_mode="razorpay-test",
+        brain_name=agent.brain_name, transport_mode=f"email:{outbox.mode}", rails_mode="razorpay_test",
     )
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="warning"))
     thread = threading.Thread(target=server.run, daemon=True)
