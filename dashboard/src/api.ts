@@ -97,6 +97,12 @@ export type CommitmentSource = "promise" | "concession" | "installment" | "human
 export type CommitmentState =
   | "active" | "partially_fulfilled" | "fulfilled" | "missed" | "cancelled" | "superseded";
 export type MatchedBy = "instrument" | "invoice" | "instrument-late" | null;
+/**
+ * Who issued the payment instrument. `razorpay_test` = a real Razorpay test-mode link whose URL
+ * must be used verbatim; `sandbox` = the offline fake rail (never a checkout, never openable);
+ * null = nothing issued. Always decide by this field, never by inspecting the URL.
+ */
+export type InstrumentMode = "razorpay_test" | "sandbox" | null;
 
 export interface Commitment {
   id: string;
@@ -116,6 +122,10 @@ export interface Commitment {
   instrument_type: "payment_link" | null;
   instrument_id: string | null;
   payment_url: string | null;
+  /** Absent on API builds that predate instrument modes; treated as unknown, never as a link. */
+  instrument_mode?: InstrumentMode;
+  /** True when the rail refused to issue an instrument (a `rail_failed` audit event exists). */
+  instrument_failed?: boolean | null;
   instrument_sent: boolean;
   reminder_sent: boolean;
   created_at: string;
@@ -212,7 +222,10 @@ export interface CommitmentChain {
   policy: { allowed: true; reason: string; checks: PolicyCheck[]; event: EventRef | null };
   instrument: {
     type: string | null; id: string | null; url: string | null; amount: number; expires: string;
-    notes: string | null; reference_id: string | null; sent: boolean;
+    /** Razorpay `notes` object (invoice_id, commitment_id) as issued; a string on very old rows. */
+    notes: Record<string, string> | string | null;
+    reference_id: string | null; sent: boolean;
+    mode?: InstrumentMode; failed?: boolean; failure_reason?: string | null;
     event: EventRef | null; confirmation: EventRef | null;
   };
   rail: RailRow[];
@@ -256,6 +269,9 @@ export interface CommitmentSummary {
   average_delay_days: number | null;
   recovered_per_commitment_paise: number | null;
   recovered_per_attempt_paise: number | null;
+  /** Total messages and the subset that were nudges (asks for money); absent on older builds. */
+  messages_total?: number;
+  nudges?: number;
   exact_instrument_matched_paise: number;
 }
 
@@ -720,4 +736,34 @@ export function when(iso: string | null | undefined): string {
   if (!iso) return "—";
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleString("en-IN");
+}
+
+/** A timestamp rendered in Indian Standard Time, the policy timezone, e.g. "28 Aug 2026, 11:59 pm IST". */
+export function whenIST(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit", hour12: true,
+  }) + " IST";
+}
+
+/** Whole days from today (local calendar) to a YYYY-MM-DD date; negative when the date has passed. */
+export function daysUntil(ymd: string | null | undefined, today: Date = new Date()): number | null {
+  if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return null;
+  const [y, m, d] = ymd.split("-").map(Number);
+  const target = Date.UTC(y, m - 1, d);
+  const base = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  return Math.round((target - base) / 86_400_000);
+}
+
+/** "in 3 days", "today", "5 days ago" — for secondary date text next to a due date. */
+export function relativeDays(ymd: string | null | undefined, today?: Date): string {
+  const n = daysUntil(ymd, today);
+  if (n === null) return "";
+  if (n === 0) return "today";
+  if (n === 1) return "tomorrow";
+  if (n === -1) return "yesterday";
+  return n > 0 ? `in ${n} days` : `${-n} days ago`;
 }

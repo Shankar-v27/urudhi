@@ -35,6 +35,7 @@ from urudhi.ledger.commitments import profile_for
 from urudhi.ledger.models import CommitmentState, Debtor, InvoiceState
 from urudhi.ledger.transitions import InvalidTransition
 from urudhi.observability import counters, get_logger, new_request_id
+from urudhi.rails.razorpay_client import instrument_mode
 from urudhi.rails.webhooks import (
     IngestStatus,
     WebhookError,
@@ -278,7 +279,8 @@ def create_app(
             "invoice": invoice.model_dump(mode="json") | {"balance": invoice.balance},
             "debtor": public_debtor(store.get_debtor(invoice.debtor_id)),
             "promises": [p.model_dump(mode="json") for p in store.promises_for(invoice_id)],
-            "commitments": [c.model_dump(mode="json") for c in store.commitments_for(invoice_id)],
+            "commitments": [public_commitment(c, {invoice.id: invoice.number}, _failed_instruments())
+                            for c in store.commitments_for(invoice_id)],
             "concessions": [c.model_dump(mode="json") for c in store.concessions_for(invoice_id)],
             "payments": [p.model_dump(mode="json") for p in store.payments_for(invoice_id)],
             "events": [e.model_dump(mode="json") for e in store.events_for(invoice_id)],
@@ -310,14 +312,23 @@ def create_app(
     def promises(_: str = Depends(require_token)) -> list[dict[str, Any]]:
         return [p.model_dump(mode="json") for p in store.all_promises()]
 
+    def _failed_instruments() -> set[str]:
+        return {str(e.payload.get("commitment_id")) for e in store.events_of_kind(EventKind.RAIL_FAILED)
+                if e.payload.get("commitment_id")}
+
+    def public_commitment(c, numbers: dict[str, str], failed: set[str]) -> dict[str, Any]:
+        return c.model_dump(mode="json") | {
+            "amount_remaining": c.amount_remaining,
+            "invoice_number": numbers.get(c.invoice_id),
+            "instrument_mode": instrument_mode(c.instrument_id, c.payment_url),
+            "instrument_failed": c.instrument_id is None and c.id in failed,
+        }
+
     @app.get("/api/commitments")
     def commitments(_: str = Depends(require_token)) -> list[dict[str, Any]]:
         numbers = {i.id: i.number for i in store.all_invoices()}
-        return [
-            c.model_dump(mode="json") | {"amount_remaining": c.amount_remaining,
-                                         "invoice_number": numbers.get(c.invoice_id)}
-            for c in store.all_commitments()
-        ]
+        failed = _failed_instruments()
+        return [public_commitment(c, numbers, failed) for c in store.all_commitments()]
 
     @app.get("/api/invoices/{invoice_id}/commitments")
     def invoice_commitments(invoice_id: str, _: str = Depends(require_token)) -> dict[str, Any]:

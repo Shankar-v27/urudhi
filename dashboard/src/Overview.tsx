@@ -1,399 +1,284 @@
-/** Overview: live summary tiles, recovery-over-time, and the simulated arm comparison. */
+/** Overview: live KPIs, the three-arm comparison and recovery trend from the experiment, and revenue at risk. */
 
-import { ReactNode } from "react";
+import { useMemo } from "react";
 import {
-  ArmCommitments, ArmMetrics, ArmName, AttributionMethod, CommitmentSummary, Experiment, Loaded, Summary,
-  api, inr, inrShort, inrSigned, num, pct, useLoad,
+  ArmName, Experiment, Invoice, Loaded, Summary, api, daysUntil, inr, inrShort, inrSigned, num, pct, useLoad,
 } from "./api";
-import { BarGroup, COLORS, HBars, LineChart, Status, Tag, Tile } from "./ui";
+import {
+  BarGroup, COLORS, Card, EmptyState, HBars, LineChart, MetricCard, ModeBadge, Pill, SectionHeader, Skeleton, Status,
+  stateLabel,
+} from "./ui";
 
 const ARMS: ArmName[] = ["no_action", "baseline", "urudhi"];
+const ARM_LABEL: Record<ArmName, string> = { no_action: "No action", baseline: "Fixed-cadence baseline", urudhi: "Urudhi" };
 
-function Tiles({ summary }: { summary: Summary }) {
-  const rate = summary.outstanding_paise > 0 ? summary.recovered_paise / summary.outstanding_paise : 0;
+const SIM_COMMAND = "python -m urudhi.sim --arms all";
+
+function money0(v: number | null | undefined): string {
+  return v === null || v === undefined ? "—" : inr(v);
+}
+
+// -- KPI row -----------------------------------------------------------------
+
+function Kpis({ summary, experiment }: { summary: Summary; experiment: Loaded<Experiment> }) {
+  const rate = summary.outstanding_paise > 0 ? summary.recovered_paise / summary.outstanding_paise : null;
+  const net = summary.recovered_paise - summary.waived_paise;
+  const x = experiment.data;
+  const c = summary.commitments;
+  const nudges = c.nudges ?? null;
+  const perNudge = c.recovered_per_attempt_paise ?? x?.arms.urudhi?.recovered_per_contact_attempt_paise ?? null;
+  const perNudgeSimulated = c.recovered_per_attempt_paise === null || c.recovered_per_attempt_paise === undefined;
   return (
-    <div className="tiles">
-      <Tile label="Invoices" value={num(summary.invoices)} />
-      <Tile label="Outstanding" value={inr(summary.outstanding_paise)} />
-      <Tile label="Recovered — observed on rails" value={inr(summary.recovered_paise)} />
-      <Tile label="Waived (discount cost)" value={inr(summary.waived_paise)} />
-      <Tile label="Recovery rate" value={pct(rate)} sub={`${num(summary.messages_sent)} messages sent`} />
-      <Tile label="Brain · transport" value={<span className="mode">{summary.brain} · {summary.transport}</span>} />
+    <div className="kpis">
+      <MetricCard label="Amount at Risk" value={inrShort(summary.outstanding_paise)} exact={inr(summary.outstanding_paise)}
+        sub={`${num(summary.invoices)} invoices`} />
+      <MetricCard label="Recovered" badge={<ModeBadge mode="observed" />} tone="accent"
+        value={inrShort(summary.recovered_paise)} exact={inr(summary.recovered_paise)}
+        sub="Observed on payment rails" />
+      <MetricCard label="Recovery Rate" value={pct(rate)} exact={rate === null ? undefined : `${inr(summary.recovered_paise)} of ${inr(summary.outstanding_paise)}`}
+        sub={`${num(summary.messages_sent)} messages sent`} />
+      <MetricCard label="Net Recovered" value={inrShort(net)} exact={inr(net)}
+        sub={`after ${inr(summary.waived_paise)} waived`} />
+      <MetricCard label="Recovery Uplift vs baseline" badge={<ModeBadge mode="simulation" />}
+        value={x ? inrShort(x.uplift.urudhi_vs_baseline_paise) : "—"}
+        exact={x ? inrSigned(x.uplift.urudhi_vs_baseline_paise) : undefined}
+        sub={x ? `${x.uplift.urudhi_vs_baseline_points >= 0 ? "+" : ""}${num(x.uplift.urudhi_vs_baseline_points, 1)} pts recovery rate` : experiment.error ? "no experiment report" : "loading experiment…"} />
+      <MetricCard label="Contact Efficiency" badge={perNudgeSimulated && perNudge !== null ? <ModeBadge mode="simulation" /> : undefined}
+        value={perNudge === null ? "—" : inrShort(perNudge)} exact={perNudge === null ? undefined : inr(perNudge)}
+        sub={perNudge === null ? "no nudges yet" : `₹ recovered per nudge${nudges !== null ? ` · ${num(nudges)} nudges` : ""}`} />
     </div>
   );
 }
 
-const money0 = (v: number | null | undefined) => (v === null || v === undefined ? "—" : inr(v));
-
-function CommitmentTiles({ c }: { c: CommitmentSummary }) {
-  const resolved = c.fulfilled + c.missed;
-  return (
-    <section>
-      <h2>Commitments — accepted, instrumented, verified on rails <Tag>observed</Tag></h2>
-      <div className="tiles">
-        <Tile label="Commitments created" value={num(c.created)}
-          sub={`${num(c.active)} active · ${num(c.partially_fulfilled)} partial · ${num(c.cancelled)} cancelled`} />
-        <Tile label="Fulfilment rate" value={pct(c.fulfillment_rate)}
-          sub={resolved > 0 ? `${num(c.fulfilled)} of ${num(resolved)} resolved · ${num(c.missed)} missed` : "nothing resolved yet"} />
-        <Tile label="₹ recovered per commitment" value={money0(c.recovered_per_commitment_paise)}
-          sub={c.conversion !== null ? `${pct(c.conversion, 0)} of commitments saw money` : "no commitments"} />
-        <Tile label="₹ recovered per contact attempt" value={money0(c.recovered_per_attempt_paise)}
-          sub={c.average_delay_days !== null ? `avg delay ${num(c.average_delay_days, 1)} d on fulfilled` : "no fulfilled commitments"} />
-        <Tile label="Exact-matched on instrument" value={inr(c.exact_instrument_matched_paise)}
-          sub={`${inr(c.amount_received_paise)} received of ${inr(c.amount_committed_paise)} committed`} />
-      </div>
-    </section>
-  );
-}
-
-function RecoveryTimeline() {
-  const timeline = useLoad(api.timeline);
-  return (
-    <section>
-      <h2>Cumulative recovered over time <Tag>observed</Tag></h2>
-      <Status load={timeline}>
-        {(t) => (
-          <LineChart
-            title="Cumulative recovered paise per day"
-            labels={t.series.map((p) => p.day)}
-            series={[{ label: "recovered (cumulative)", color: COLORS.green,
-              values: t.series.map((p) => p.recovered_cumulative) }]}
-            format={inrShort}
-          />
-        )}
-      </Status>
-    </section>
-  );
-}
-
-type Row = { key: keyof ArmMetrics; label: string; format: (v: number | null) => string };
-type CommitmentRow = { label: string; value: (c: ArmCommitments) => string };
-const money = (v: number | null) => (v === null ? "—" : inr(v));
-const count = (v: number | null) => num(v);
-const rate = (v: number | null) => pct(v);
-const days = (v: number | null) => (v === null ? "—" : `${num(v, 1)} d`);
-
-const METRIC_ROWS: Row[] = [
-  { key: "invoices", label: "Invoices", format: count },
-  { key: "amount_at_risk_paise", label: "Amount at risk", format: money },
-  { key: "recovered_paise", label: "Recovered", format: money },
-  { key: "recovery_rate", label: "Recovery rate", format: rate },
-  { key: "discount_cost_paise", label: "Discount cost", format: money },
-  { key: "net_recovered_paise", label: "Net recovered", format: money },
-  { key: "invoices_paid", label: "Invoices paid", format: count },
-  { key: "promises_made", label: "Promises made", format: count },
-  { key: "promises_kept", label: "Promises kept", format: count },
-  { key: "promises_broken", label: "Promises broken", format: count },
-  { key: "promise_kept_rate", label: "Promise kept rate", format: rate },
-  { key: "escalations", label: "Escalations", format: count },
-  { key: "disputes", label: "Disputes", format: count },
-  { key: "stop_contacts", label: "Stop-contact requests", format: count },
-  { key: "contact_attempts", label: "Contact attempts", format: count },
-  { key: "recovered_per_contact_attempt_paise", label: "₹ recovered per contact attempt", format: money },
-  { key: "offers_made", label: "Offers made", format: count },
-  { key: "offers_accepted", label: "Offers accepted", format: count },
-  { key: "days_to_recovery_median", label: "Days to recovery (median)", format: days },
-  { key: "days_to_recovery_mean", label: "Days to recovery (mean)", format: days },
-];
-
-const COMMITMENT_ROWS: CommitmentRow[] = [
-  { label: "Commitments created", value: (c) => num(c.created) },
-  { label: "  from promises / concessions / installments / human",
-    value: (c) => ["promise", "concession", "installment", "human"].map((k) => num(c.by_source[k] ?? 0)).join(" / ") },
-  { label: "Instruments issued", value: (c) => num(c.instruments_issued) },
-  { label: "Fulfilled (on time)", value: (c) => `${num(c.fulfilled)} (${num(c.fulfilled_on_time)})` },
-  { label: "Partially fulfilled", value: (c) => num(c.partially_fulfilled) },
-  { label: "Missed", value: (c) => num(c.missed) },
-  { label: "Cancelled", value: (c) => num(c.cancelled) },
-  { label: "Active at end", value: (c) => num(c.active_at_end) },
-  { label: "Fulfilment rate", value: (c) => pct(c.fulfillment_rate) },
-  { label: "Commitment → payment conversion", value: (c) => pct(c.commitment_to_payment_conversion) },
-  { label: "Median days commitment → payment", value: (c) => days(c.median_days_commitment_to_payment) },
-  { label: "Average delay on fulfilled", value: (c) => days(c.average_delay_days) },
-  { label: "Amount committed", value: (c) => inr(c.amount_committed_paise) },
-  { label: "Amount fulfilled", value: (c) => inr(c.amount_fulfilled_paise) },
-  { label: "₹ recovered / commitment", value: (c) => money0(c.recovered_per_commitment_paise) },
-  { label: "₹ recovered / contact attempt", value: (c) => money0(c.recovered_per_contact_attempt_paise) },
-  { label: "Exact-matched payments (₹)", value: (c) => `${num(c.exact_matched_payments)} (${inr(c.exact_matched_paise)})` },
-];
-
-const METHODS: AttributionMethod[] = ["exact", "window", "unattributed"];
-const METHOD_COLOR: Record<AttributionMethod, string> = {
-  exact: COLORS.green, window: COLORS.blue, unattributed: COLORS.muted,
-};
-
-function CommitmentComparison({ x, arms }: { x: Experiment; arms: ArmName[] }) {
-  const withData = arms.filter((a) => x.arms[a].commitments);
-  if (withData.length === 0) {
-    return (
-      <p className="muted">
-        This report predates the commitment engine — no per-arm commitment metrics were written. Re-run{" "}
-        <code>python -m urudhi.sim --arms all</code> to measure them.
-      </p>
-    );
-  }
-  const bars: BarGroup[] = withData.map((a) => {
-    const c = x.arms[a].commitments!;
-    return {
-      label: x.arms[a].label,
-      bars: [
-        { label: "₹ / commitment", value: c.recovered_per_commitment_paise ?? 0, color: COLORS.green,
-          note: c.created === 0 ? "no commitments in this arm" : `${num(c.created)} created` },
-        { label: "₹ / contact attempt", value: c.recovered_per_contact_attempt_paise ?? 0, color: COLORS.blue,
-          note: pct(c.fulfillment_rate) === "—" ? "no fulfilment rate" : `fulfilment ${pct(c.fulfillment_rate, 0)}` },
-      ],
-    };
-  });
-  return (
-    <>
-      <p className="muted small">
-        Only the Urudhi arm runs the commitment engine; the no-action and baseline arms never create
-        commitments, so their zeros are real, not missing data.
-      </p>
-      <div className="scroll">
-        <table className="compact">
-          <thead>
-            <tr>
-              <th>Metric</th>
-              {withData.map((a) => <th key={a} className="num">{x.arms[a].label}</th>)}
-            </tr>
-          </thead>
-          <tbody>
-            {COMMITMENT_ROWS.map((row) => (
-              <tr key={row.label}>
-                <td>{row.label}</td>
-                {withData.map((a) => {
-                  const c = x.arms[a].commitments!;
-                  return <td key={a} className="num">{c.created === 0 && row.label !== "Commitments created" ? <span className="muted">— (0 commitments)</span> : row.value(c)}</td>;
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <HBars title="Recovered per commitment and per contact attempt, by arm" groups={bars} format={inrShort} />
-    </>
-  );
-}
-
-function AttributionByMethod({ x, arms }: { x: Experiment; arms: ("urudhi" | "baseline")[] }) {
-  const withMethod = arms.filter((a) => x.attribution.arms[a]?.by_method);
-  if (withMethod.length === 0) {
-    return <p className="muted small">No attribution-by-method breakdown in this report (it predates exact instrument matching).</p>;
-  }
-  const groups: BarGroup[] = withMethod.map((a) => {
-    const m = x.attribution.arms[a]!.by_method!;
-    return {
-      label: x.arms[a].label,
-      bars: METHODS.map((k) => ({
-        label: k, value: m[k].paise, color: METHOD_COLOR[k], note: `${num(m[k].payments)} payments`,
-      })),
-    };
-  });
-  return (
-    <>
-      <p className="muted small">
-        <b>exact</b> = the payment came through the Razorpay link tagged with a commitment id;{" "}
-        <b>window</b> = attributed to the last message within {x.attribution.window_days} days;{" "}
-        <b>unattributed</b> = no intervention can claim it.
-      </p>
-      <HBars title="Attributed paise by matching method, per arm" groups={groups} format={inrShort} />
-    </>
-  );
-}
-
-function metric(arm: ArmMetrics, row: Row): string {
-  const value = arm[row.key];
-  return typeof value === "number" ? row.format(value) : row.format(null);
-}
-
-function bucketOrder(a: string, b: string): number {
-  const na = parseFloat(a.replace(/[^\d.-]/g, ""));
-  const nb = parseFloat(b.replace(/[^\d.-]/g, ""));
-  if (Number.isNaN(na) || Number.isNaN(nb)) return a.localeCompare(b);
-  return na - nb;
-}
+// -- three-arm comparison ------------------------------------------------------
 
 function ArmComparison({ x }: { x: Experiment }) {
   const arms = ARMS.filter((a) => x.arms[a]);
-  const maxRisk = Math.max(...arms.map((a) => x.arms[a].amount_at_risk_paise), 1);
-  const recoveredGroups: BarGroup[] = arms.map((a) => ({
-    label: x.arms[a].label,
-    bars: [
-      { label: "recovered", value: x.arms[a].recovered_paise, color: COLORS.blue,
-        note: pct(x.arms[a].recovery_rate) },
-      { label: "net recovered", value: x.arms[a].net_recovered_paise, color: COLORS.green },
-    ],
-  }));
-
-  const buckets = Array.from(new Set(
-    Object.values(x.days_to_recovery).flatMap((d) => Object.keys(d.histogram)),
-  )).sort(bucketOrder);
-  const histogram: BarGroup[] = buckets.map((bucket) => ({
-    label: `${bucket} days`,
+  const maxRisk = Math.max(1, ...arms.map((a) => x.arms[a].amount_at_risk_paise));
+  const recovered: BarGroup[] = [{
+    label: "Recovered",
+    bars: arms.map((a) => ({ label: ARM_LABEL[a], value: x.arms[a].recovered_paise, color: COLORS[a], note: pct(x.arms[a].recovery_rate) })),
+  }];
+  const perContact: BarGroup[] = [{
+    label: "₹ per contact",
     bars: arms.map((a) => ({
-      label: x.arms[a].label, color: COLORS[a],
-      value: x.days_to_recovery[a]?.histogram[bucket] ?? 0,
+      label: ARM_LABEL[a], color: COLORS[a],
+      value: x.arms[a].recovered_per_contact_attempt_paise ?? (x.arms[a].contact_attempts > 0 ? Math.round(x.arms[a].recovered_paise / x.arms[a].contact_attempts) : 0),
+      note: `${num(x.arms[a].contact_attempts)} nudges`,
     })),
-  }));
-
-  const attributionArms = (["urudhi", "baseline"] as const).filter((a) => x.attribution.arms[a]);
-
+  }];
+  const perContactValue = (a: ArmName) =>
+    x.arms[a].recovered_per_contact_attempt_paise ?? (x.arms[a].contact_attempts > 0 ? Math.round(x.arms[a].recovered_paise / x.arms[a].contact_attempts) : null);
+  const rows: { label: string; value: (a: ArmName) => string; sub?: (a: ArmName) => string }[] = [
+    { label: "Recovery rate", value: (a) => pct(x.arms[a].recovery_rate), sub: (a) => `${num(x.arms[a].invoices_paid)} of ${num(x.arms[a].invoices)} paid` },
+    { label: "Recovered", value: (a) => inr(x.arms[a].recovered_paise), sub: (a) => `net ${inr(x.arms[a].net_recovered_paise)}` },
+    { label: "Messages (nudges)", value: (a) => num(x.arms[a].contact_attempts) },
+    { label: "₹ per contact", value: (a) => money0(perContactValue(a)) },
+    { label: "Days to recovery (median)", value: (a) => x.arms[a].days_to_recovery_median === null ? "—" : `${num(x.arms[a].days_to_recovery_median, 1)} d`,
+      sub: (a) => x.arms[a].days_to_recovery_mean === null ? "no recoveries" : `mean ${num(x.arms[a].days_to_recovery_mean, 1)} d` },
+    { label: "Promises kept", value: (a) => `${num(x.arms[a].promises_kept)} / ${num(x.arms[a].promises_made)}`, sub: (a) => pct(x.arms[a].promise_kept_rate) },
+    { label: "Escalations · disputes · stop-contact", value: (a) => `${num(x.arms[a].escalations)} · ${num(x.arms[a].disputes)} · ${num(x.arms[a].stop_contacts)}` },
+  ];
   return (
-    <section className="experiment">
-      <h2>Urudhi vs baseline vs no action <Tag tone="sim">simulated</Tag></h2>
-      <p className="muted">
-        {x.generated_by} · seed {x.seed} · {x.days} days · {num(x.count)} synthetic invoices · brain: {x.brain}.
-        Every number in this section comes from the simulator, not from the live ledger.
-      </p>
-
-      <div className="tiles">
-        <Tile label="Urudhi vs baseline" value={inrSigned(x.uplift.urudhi_vs_baseline_paise)}
+    <Card>
+      <SectionHeader title="No action · Fixed-cadence baseline · Urudhi"
+        badge={<><ModeBadge mode="simulation" /><ModeBadge mode="persona" /></>}
+        description={<>{x.generated_by} · seed {x.seed} · {x.days} days · {num(x.count)} synthetic invoices · brain {x.brain}. Three arms start from byte-identical portfolios; the difference is strategy under the persona model, not evidence about real debtors.</>} />
+      <div className="arm-grid" role="table" aria-label="Arm comparison">
+        <div className="head" role="columnheader">Metric</div>
+        {arms.map((a) => <div key={a} className={`head v ${a}`} role="columnheader">{ARM_LABEL[a]}</div>)}
+        {rows.map((r) => (
+          <div key={r.label} style={{ display: "contents" }} role="row">
+            <div role="rowheader">{r.label}</div>
+            {arms.map((a) => (
+              <div key={a} className={`v ${a}`} role="cell">
+                {r.value(a)}
+                {r.sub && <span className="sub">{r.sub(a)}</span>}
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+      <div className="columns" style={{ marginTop: 16 }}>
+        <div>
+          <h4 style={{ marginBottom: 6 }}>Recovered · scaled to amount at risk {inrShort(maxRisk)}</h4>
+          <HBars title="Recovered per arm" groups={recovered} max={maxRisk} format={inrShort} labelWidth={110} />
+        </div>
+        <div>
+          <h4 style={{ marginBottom: 6 }}>₹ recovered per contact</h4>
+          <HBars title="Rupees recovered per contact per arm" groups={perContact} format={inrShort} labelWidth={110} />
+        </div>
+      </div>
+      <div className="kpis" style={{ marginTop: 16 }}>
+        <MetricCard label="Urudhi vs baseline" size="md" badge={<ModeBadge mode="simulation" />} value={inrSigned(x.uplift.urudhi_vs_baseline_paise)}
           sub={`${x.uplift.urudhi_vs_baseline_points >= 0 ? "+" : ""}${num(x.uplift.urudhi_vs_baseline_points, 1)} pts recovery rate`} />
-        <Tile label="Urudhi vs no action" value={inrSigned(x.uplift.urudhi_vs_no_action_paise)}
+        <MetricCard label="Urudhi vs no action" size="md" badge={<ModeBadge mode="simulation" />} value={inrSigned(x.uplift.urudhi_vs_no_action_paise)}
           sub={`${x.uplift.urudhi_vs_no_action_points >= 0 ? "+" : ""}${num(x.uplift.urudhi_vs_no_action_points, 1)} pts recovery rate`} />
-        <Tile label="Net of discounts vs baseline" value={inrSigned(x.uplift.net_urudhi_vs_baseline_paise)}
+        <MetricCard label="Net of discounts vs baseline" size="md" badge={<ModeBadge mode="simulation" />} value={inrSigned(x.uplift.net_urudhi_vs_baseline_paise)}
           sub="recovered minus discount cost" />
       </div>
-
-      <h3>Recovered and net recovered, by arm</h3>
-      <HBars title="Recovered and net recovered per arm" groups={recoveredGroups} max={maxRisk} format={inrShort} />
-      <p className="muted small">Bars are scaled to the amount at risk ({inr(maxRisk)}); the note after each recovered bar is the recovery rate.</p>
-
-      <h3>Cumulative recovered per day, by arm</h3>
-      <LineChart
-        title="Simulated cumulative recovered per day per arm"
-        labels={x.timeline.days}
-        series={arms.map((a) => ({ label: x.arms[a].label, color: COLORS[a], values: x.timeline[a] ?? [] }))}
-        format={inrShort}
-      />
-
-      <h3>All arm metrics</h3>
-      <div className="scroll">
-        <table className="compact">
-          <thead>
-            <tr>
-              <th>Metric</th>
-              {arms.map((a) => <th key={a} className="num">{x.arms[a].label}</th>)}
-            </tr>
-          </thead>
-          <tbody>
-            {METRIC_ROWS.map((row) => (
-              <tr key={row.key}>
-                <td>{row.label}</td>
-                {arms.map((a) => <td key={a} className="num">{metric(x.arms[a], row)}</td>)}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <h3>Commitment engine, by arm</h3>
-      <CommitmentComparison x={x} arms={arms} />
-
-      <h3>Days to recovery</h3>
-      <div className="tiles">
-        {arms.map((a) => {
-          const d = x.days_to_recovery[a];
-          return (
-            <Tile key={a} label={x.arms[a].label}
-              value={d && d.median !== null ? `${num(d.median, 1)} d median` : "—"}
-              sub={d && d.mean !== null ? `${num(d.mean, 1)} d mean` : "no recoveries"} />
-          );
-        })}
-      </div>
-      {histogram.length > 0 && (
-        <HBars title="Days-to-recovery histogram by arm" groups={histogram} format={(v) => num(v)} />
-      )}
-
-      <h3>Attribution by intervention</h3>
-      <p className="muted small">Rule: {x.attribution.rule} · window {x.attribution.window_days} days.</p>
-      <div className="columns">
-        {attributionArms.map((a) => {
-          const att = x.attribution.arms[a]!;
-          const items: BarGroup[] = Object.entries(att.by_intervention)
-            .sort((p, q) => q[1].paise - p[1].paise)
-            .map(([kind, b]) => ({
-              label: kind.replace(/_/g, " "),
-              bars: [{ label: kind, value: b.paise, color: COLORS[a], note: `${b.payments} payments` }],
-            }));
-          items.push({
-            label: "unattributed",
-            bars: [{ label: "unattributed", value: att.unattributed.paise, color: COLORS.muted,
-              note: `${att.unattributed.payments} payments` }],
-          });
-          return (
-            <div key={a}>
-              <h4>{x.arms[a].label}</h4>
-              <HBars title={`Attribution for ${x.arms[a].label}`} groups={items} format={inrShort} labelWidth={130} />
-            </div>
-          );
-        })}
-      </div>
-
-      <h3>Attribution by matching method</h3>
-      <AttributionByMethod x={x} arms={attributionArms} />
-
-      <h3>Policy sensitivity</h3>
-      {x.sensitivity.length === 0 ? <p className="muted">no sensitivity sweep in this report</p> : (
-        <div className="scroll">
-          <table className="compact">
-            <thead>
-              <tr>
-                <th>Parameter</th>
-                <th className="num">Value</th>
-                <th className="num">Recovered</th>
-                <th className="num">Rate</th>
-                <th className="num">Messages</th>
-                <th className="num">Escalations</th>
-                <th className="num">Discount cost</th>
-                <th className="num">Stop contacts</th>
-              </tr>
-            </thead>
-            <tbody>
-              {x.sensitivity.map((s, i) => (
-                <tr key={`${s.parameter}-${s.value}-${i}`}>
-                  <td>{s.parameter}</td>
-                  <td className="num">{num(s.value, Number.isInteger(s.value) ? 0 : 2)}</td>
-                  <td className="num">{inr(s.recovered_paise)}</td>
-                  <td className="num">{pct(s.recovery_rate)}</td>
-                  <td className="num">{num(s.messages_sent)}</td>
-                  <td className="num">{num(s.escalations)}</td>
-                  <td className="num">{inr(s.discount_cost_paise)}</td>
-                  <td className="num">{num(s.stop_contacts)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      <div className="caveats">
-        <h3>What these numbers are (and aren't)</h3>
-        <ul>
-          {x.caveats.map((c, i) => <li key={i}>{c}</li>)}
-        </ul>
-      </div>
-    </section>
+    </Card>
   );
 }
 
-export function Overview({ summary }: { summary: Loaded<Summary> }) {
+function Trend({ x }: { x: Experiment }) {
+  const arms = ARMS.filter((a) => x.arms[a] && x.timeline[a]);
+  return (
+    <Card>
+      <SectionHeader title="Cumulative recovery" badge={<ModeBadge mode="simulation" />}
+        description="Recovered paise per day, cumulative, for each arm of the experiment. Hover for the exact figures." />
+      <LineChart title="Simulated cumulative recovered per day per arm" labels={x.timeline.days}
+        series={arms.map((a) => ({ label: ARM_LABEL[a], color: COLORS[a], values: x.timeline[a] }))} format={inrShort} />
+    </Card>
+  );
+}
+
+function ObservedTrend() {
+  const timeline = useLoad(api.timeline);
+  return (
+    <Card>
+      <SectionHeader title="Recovery on the rails" badge={<ModeBadge mode="observed" />}
+        description="Cumulative paise reported by the payment rails on the live ledger." />
+      <Status load={timeline} rows={4}>
+        {(t) => (
+          <LineChart title="Cumulative recovered per day, observed" labels={t.series.map((p) => p.day)}
+            series={[{ label: "Recovered (cumulative)", color: COLORS.urudhi, values: t.series.map((p) => p.recovered_cumulative) }]}
+            format={inrShort} />
+        )}
+      </Status>
+    </Card>
+  );
+}
+
+// -- revenue at risk -----------------------------------------------------------
+
+type Bucket = { label: string; tone: "" | "warn" | "danger" | "neutral"; count: number; paise: number };
+
+function ageBuckets(invoices: Invoice[], today?: Date): Bucket[] {
+  const buckets: Bucket[] = [
+    { label: "Not yet due", tone: "neutral", count: 0, paise: 0 },
+    { label: "1–30 days", tone: "", count: 0, paise: 0 },
+    { label: "31–60 days", tone: "warn", count: 0, paise: 0 },
+    { label: "61–90 days", tone: "warn", count: 0, paise: 0 },
+    { label: "90+ days", tone: "danger", count: 0, paise: 0 },
+  ];
+  for (const i of invoices) {
+    if (i.balance <= 0) continue;
+    const d = daysUntil(i.due_on, today);
+    const overdue = d === null ? 0 : -d;
+    const idx = overdue <= 0 ? 0 : overdue <= 30 ? 1 : overdue <= 60 ? 2 : overdue <= 90 ? 3 : 4;
+    buckets[idx].count += 1;
+    buckets[idx].paise += i.balance;
+  }
+  return buckets;
+}
+
+function BucketList({ items, format }: { items: { label: string; tone: string; value: number; sub?: string }[]; format: (v: number) => string }) {
+  const max = Math.max(1, ...items.map((i) => i.value));
+  return (
+    <ul className="buckets">
+      {items.map((i) => (
+        <li key={i.label} className={i.tone}>
+          <span>{i.label}</span>
+          <span className="bar" aria-hidden="true"><i style={{ width: `${(i.value / max) * 100}%` }} /></span>
+          <span className="v">{format(i.value)}{i.sub && <small>{i.sub}</small>}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function RevenueAtRisk({ summary, invoices }: { summary: Summary; invoices: Loaded<Invoice[]> }) {
+  const promises = useLoad(api.promises);
+  const rows = invoices.data ?? [];
+  const byState = useMemo(() => {
+    const m = new Map<string, { count: number; paise: number }>();
+    for (const i of rows) {
+      const e = m.get(i.state) ?? { count: 0, paise: 0 };
+      e.count += 1; e.paise += i.balance;
+      m.set(i.state, e);
+    }
+    return m;
+  }, [rows]);
+  const buckets = useMemo(() => ageBuckets(rows), [rows]);
+  const openPromised = (promises.data ?? []).filter((p) => p.state === "open").reduce((s, p) => s + p.amount, 0);
+  const openCount = (promises.data ?? []).filter((p) => p.state === "open").length;
+  const escalatedBalance = rows.filter((i) => i.state === "escalated" || i.state === "disputed").reduce((s, i) => s + i.balance, 0);
+  const escalatedCount = rows.filter((i) => i.state === "escalated" || i.state === "disputed").length;
+  const outstandingBalance = rows.reduce((s, i) => s + i.balance, 0);
+  const toneOf = (state: string): string =>
+    state === "escalated" || state === "disputed" ? "danger" : state === "paid" || state === "closed" ? "neutral"
+      : state === "stop_contact" ? "neutral" : state === "promised" ? "" : "warn";
+  const stateOrder = Object.keys(summary.by_state);
+  const sorted = (keys: string[]) => [...keys].sort((a, b) => stateOrder.indexOf(a) - stateOrder.indexOf(b));
+
+  return (
+    <Card>
+      <SectionHeader title="Revenue at risk" badge={<ModeBadge mode="observed" label="Live ledger" title="Computed from the live invoices, promises and summary endpoints" />}
+        description="Where the outstanding balance sits right now: by invoice state, by promise, and by how long it has been overdue." />
+      <div className="kpis" style={{ marginBottom: 16 }}>
+        <MetricCard label="Open balance" size="md" value={inrShort(outstandingBalance)} exact={inr(outstandingBalance)}
+          sub={`${num(rows.filter((i) => i.balance > 0).length)} invoices with a balance`} />
+        <MetricCard label="Promised (open promises)" size="md" value={promises.data ? inrShort(openPromised) : "…"} exact={inr(openPromised)}
+          sub={promises.data ? `${num(openCount)} open promise${openCount === 1 ? "" : "s"}` : promises.error ? "promises unavailable" : "loading"} />
+        <MetricCard label="Escalated / disputed balance" size="md" tone={escalatedBalance > 0 ? "danger" : undefined}
+          value={inrShort(escalatedBalance)} exact={inr(escalatedBalance)} sub={`${num(escalatedCount)} invoices waiting on a human`} />
+        <MetricCard label="Stop-contact" size="md" value={num(summary.by_state.stop_contact ?? 0)} sub="debtors who asked us to stop" />
+      </div>
+      {invoices.data === null && !invoices.error && <Skeleton rows={4} />}
+      {invoices.error && <Status load={invoices}>{() => null}</Status>}
+      {invoices.data && (
+        <div className="risk-grid">
+          <div>
+            <h4 style={{ marginBottom: 8 }}>Invoices by state</h4>
+            <BucketList format={(v) => num(v)} items={sorted(Object.keys(summary.by_state)).map((s) => ({
+              label: stateLabel(s), tone: toneOf(s), value: summary.by_state[s],
+            }))} />
+          </div>
+          <div>
+            <h4 style={{ marginBottom: 8 }}>Outstanding balance by state</h4>
+            <BucketList format={inrShort} items={sorted(Array.from(byState.keys())).filter((s) => (byState.get(s)?.paise ?? 0) > 0).map((s) => ({
+              label: stateLabel(s), tone: toneOf(s), value: byState.get(s)!.paise, sub: `${num(byState.get(s)!.count)} invoices`,
+            }))} />
+          </div>
+          <div>
+            <h4 style={{ marginBottom: 8 }}>Overdue age of open balance</h4>
+            <BucketList format={inrShort} items={buckets.map((b) => ({ label: b.label, tone: b.tone, value: b.paise, sub: `${num(b.count)} invoices` }))} />
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// -- page ------------------------------------------------------------------------
+
+export function Overview({ summary, invoices }: { summary: Loaded<Summary>; invoices: Loaded<Invoice[]> }) {
   const experiment = useLoad(api.experiment);
-  const runNote: ReactNode = (
-    <>
-      No experiment report yet. Run <code>python -m urudhi.sim --arms all</code> to produce
-      <code>data/experiment.json</code>, then reload.
-    </>
+  const missing = (
+    <Card>
+      <EmptyState title="No experiment report yet"
+        hint={<>Run the three-arm simulation to produce <code>data/experiment.json</code>, then reload.</>}
+        command={SIM_COMMAND} />
+    </Card>
   );
   return (
-    <>
-      <Status load={summary}>{(s) => <Tiles summary={s} />}</Status>
-      <Status load={summary}>{(s) => <CommitmentTiles c={s.commitments} />}</Status>
-      <RecoveryTimeline />
-      <section>
-        <Status load={experiment} notFound={runNote}>{(x) => <ArmComparison x={x} />}</Status>
-      </section>
-    </>
+    <div className="stack">
+      <div>
+        <div className="page-title"><h1>Overview</h1>{summary.data && <Pill tone="outline">brain {summary.data.brain} · {summary.data.transport}</Pill>}</div>
+        <p className="page-desc">Recovered means money the payment rails reported. Uplift and efficiency comparisons come from the simulated experiment and are labelled as such.</p>
+        <Status load={summary} rows={3}>{(s) => <Kpis summary={s} experiment={experiment} />}</Status>
+      </div>
+      <Status load={experiment} notFound={missing} rows={6}>{(x) => <ArmComparison x={x} />}</Status>
+      <Status load={experiment} notFound={null} rows={4}>{(x) => <Trend x={x} />}</Status>
+      <ObservedTrend />
+      <Status load={summary} rows={3}>{(s) => <RevenueAtRisk summary={s} invoices={invoices} />}</Status>
+      {experiment.data && experiment.data.caveats.length > 0 && (
+        <details className="caveats">
+          <summary>What the simulated numbers are (and aren't)</summary>
+          <ul>{experiment.data.caveats.map((c, i) => <li key={i}>{c}</li>)}</ul>
+        </details>
+      )}
+    </div>
   );
 }

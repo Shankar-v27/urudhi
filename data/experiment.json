@@ -23,8 +23,8 @@
     "escalate_after_broken_promises": 2,
     "recommended_escalation_min_broken": 1,
     "allowed_channels": [
-      "email",
-      "whatsapp"
+      "whatsapp",
+      "email"
     ]
   },
   "arms": {

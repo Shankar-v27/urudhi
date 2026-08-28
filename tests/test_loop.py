@@ -106,7 +106,8 @@ class TestHappyPath:
         result = agent.chase("inv_1", MORNING)
         assert result.action is Action.MESSAGE_SENT
         assert result.intervention is InterventionKind.PAYMENT_LINK
-        assert len(outbox.sent) == 1 and "rzp.io" in outbox.sent[0][2]
+        assert len(outbox.sent) == 1 and "sandbox.urudhi.invalid" in outbox.sent[0][2]
+        assert "rzp.io" not in outbox.sent[0][2]  # the fake rail never impersonates Razorpay
 
         reply = agent.handle_reply("inv_1", "Sorry sir, will pay ₹2,500 in 3 days.", MORNING)
         assert reply.action is Action.COMMITMENT_CREATED

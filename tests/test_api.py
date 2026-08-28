@@ -281,3 +281,22 @@ class TestRazorpayShapedDelivery:
         raw, headers = signed(self._razorpay_body())
         assert client.post("/webhooks/razorpay", content=raw, headers=headers).json()["status"] == "ignored"
         assert client.get("/api/summary", headers=AUTH).json()["recovered_paise"] == 0
+
+
+class TestInstrumentMode:
+    def test_sandbox_instruments_are_labelled_and_never_look_like_razorpay(self, world):
+        store, _, client = world
+        client.post("/inbound/reply", json={"invoice_id": "inv_1", "text": "will pay ₹1,000 in 2 days"},
+                    headers=AUTH)
+        [row] = client.get("/api/commitments", headers=AUTH).json()
+        assert row["instrument_mode"] == "sandbox" and row["instrument_failed"] is False
+        assert row["payment_url"].startswith("https://sandbox.urudhi.invalid/")
+        detail = client.get("/api/invoices/inv_1", headers=AUTH).json()
+        assert detail["commitments"][0]["instrument_mode"] == "sandbox"
+        assert detail["explain"]["commitments"][0]["instrument"]["mode"] == "sandbox"
+
+    def test_razorpay_ids_are_test_mode_and_fake_prefix_is_sandbox(self):
+        from urudhi.rails.razorpay_client import instrument_mode
+        assert instrument_mode("plink_TUmLQ82CcnfqwP", "https://rzp.io/rzp/fLnAb1SP") == "razorpay_test"
+        assert instrument_mode("plink_fake_0004", "https://rzp.io/l/fake0004") == "sandbox"  # legacy rows
+        assert instrument_mode(None, None) is None

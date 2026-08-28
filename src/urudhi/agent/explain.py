@@ -21,6 +21,7 @@ from urudhi.audit.log import AuditEvent, EventKind
 from urudhi.ledger.commitments import profile_for
 from urudhi.ledger.models import PaymentCommitment, PromiseState
 from urudhi.ledger.money import format_inr
+from urudhi.rails.razorpay_client import instrument_mode
 from urudhi.scoring.priority import score_invoice
 from urudhi.store import Store
 
@@ -78,6 +79,7 @@ def commitment_integrity(store: Store, commitment: PaymentCommitment,
                      and e.payload.get("due_on") == commitment.due_on.isoformat()), None)
     created = next((e for e in mine if e.kind is EventKind.COMMITMENT_CREATED), None)
     instrument = next((e for e in mine if e.kind is EventKind.PAYMENT_INSTRUMENT_CREATED), None)
+    rail_failure = next((e for e in mine if e.kind is EventKind.RAIL_FAILED), None)
     confirmation = next((e for e in mine if e.kind is EventKind.MESSAGE_SENT
                          and e.payload.get("intervention") == "commitment_confirmation"), None)
     payments = [p for p in store.payments_for(commitment.invoice_id)
@@ -132,6 +134,9 @@ def commitment_integrity(store: Store, commitment: PaymentCommitment,
             "notes": instrument.payload.get("notes") if instrument else None,
             "reference_id": instrument.payload.get("reference_id") if instrument else None,
             "sent": commitment.instrument_sent,
+            "mode": instrument_mode(commitment.instrument_id, commitment.payment_url),
+            "failed": commitment.instrument_id is None and rail_failure is not None,
+            "failure_reason": rail_failure.payload.get("error") if rail_failure else None,
             "event": _event_ref(instrument),
             "confirmation": _event_ref(confirmation),
         },

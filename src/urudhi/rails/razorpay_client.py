@@ -81,8 +81,16 @@ class RazorpayRails:
         })
 
 
+SANDBOX_LINK_HOST = "https://sandbox.urudhi.invalid"  # .invalid never resolves (RFC 2606)
+
+
 class FakeRails:
-    """Offline rail for the simulator and tests: links are deterministic URLs."""
+    """Offline rail for the simulator and tests.
+
+    Instrument ids carry the ``plink_fake_`` prefix and URLs live under a
+    reserved, non-resolving host, so a sandbox instrument can never be
+    mistaken for — or accidentally opened as — a real Razorpay checkout.
+    """
 
     def __init__(self) -> None:
         self.links: list[dict[str, Any]] = []
@@ -98,8 +106,8 @@ class FakeRails:
             "id": f"plink_fake_{n:04d}", "amount": amount, "currency": SUPPORTED_CURRENCY,
             "reference_id": link_reference(invoice_id, commitment_id, reference_id),
             "notes": link_notes(invoice_id, commitment_id),
-            "short_url": f"https://rzp.io/l/fake{n:04d}", "status": "created",
-            "expire_by": expire_by,
+            "short_url": f"{SANDBOX_LINK_HOST}/pay/plink_fake_{n:04d}", "status": "created",
+            "expire_by": expire_by, "mode": "sandbox",
         }
         self.links.append(link)
         return link
@@ -112,6 +120,23 @@ class FakeRails:
         }
         self.virtual_accounts.append(va)
         return va
+
+
+FAKE_INSTRUMENT_PREFIX = "plink_fake_"
+
+
+def instrument_mode(instrument_id: str | None, payment_url: str | None = None) -> str | None:
+    """``razorpay_test`` for ids Razorpay issued, ``sandbox`` for the fake rail, else None.
+
+    Real ids can only come from ``RazorpayRails``, which refuses non-test keys,
+    so anything that is not a sandbox id is a test-mode instrument.
+    """
+    if not instrument_id and not payment_url:
+        return None
+    if (instrument_id or "").startswith(FAKE_INSTRUMENT_PREFIX) or (
+        payment_url or "").startswith(SANDBOX_LINK_HOST) or "/l/fake" in (payment_url or ""):
+        return "sandbox"
+    return "razorpay_test"
 
 
 def link_notes(invoice_id: str, commitment_id: str | None) -> dict[str, str]:
