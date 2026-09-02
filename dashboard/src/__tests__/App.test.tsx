@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App, { bootstrapToken, headerFacts, parseHash } from "../App";
-import { SOURCE_KEY, TOKEN_KEY } from "../api";
+import { SOURCE_KEY, TOKEN_KEY, apiUrl } from "../api";
 import { sourceFromHash } from "../source";
 import {
   bySource, escalation, experiment, health, liveCommitment, liveCommitmentDetail, liveDetail, liveInvoice, livePromise, mockFetch,
@@ -284,5 +284,13 @@ describe("App shell", () => {
     expect(await screen.findByText("+91••••••••01")).toBeInTheDocument();
     expect(screen.getByText("v•••@razorpay.com")).toBeInTheDocument();
     expect(screen.getAllByText("Kumar Textiles").length).toBeGreaterThan(0);
+  });
+
+  it("resolves API URLs safely with and without VITE_API_BASE_URL", () => {
+    expect(apiUrl("/api/commitments", "")).toBe("/api/commitments");
+    expect(apiUrl("/api/commitments", "https://urudhi.onrender.com")).toBe("https://urudhi.onrender.com/api/commitments");
+    expect(apiUrl("/api/commitments", "https://urudhi.onrender.com/")).toBe("https://urudhi.onrender.com/api/commitments");
+    expect(apiUrl("api/commitments", "https://urudhi.onrender.com")).toBe("https://urudhi.onrender.com/api/commitments");
+    expect(apiUrl("https://other.example.com/api", "https://urudhi.onrender.com")).toBe("https://other.example.com/api");
   });
 });

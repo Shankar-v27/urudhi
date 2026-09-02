@@ -725,12 +725,23 @@ export class ApiError extends Error {
   }
 }
 
+export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+
+export function apiUrl(path: string, baseUrl: string = API_BASE_URL): string {
+  const base = baseUrl.replace(/\/$/, "");
+  if (!base || /^https?:\/\//i.test(path)) {
+    return path;
+  }
+  const cleanPath = path.startsWith("/") ? path : `/${path}`;
+  return `${base}${cleanPath}`;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   const token = storageGet(TOKEN_KEY);
   if (token) headers.set("Authorization", `Bearer ${token}`);
   if (init.body !== undefined) headers.set("Content-Type", "application/json");
-  const response = await fetch(path, { ...init, headers });
+  const response = await fetch(apiUrl(path), { ...init, headers });
   if (!response.ok) {
     let detail = response.statusText || "request failed";
     try {
