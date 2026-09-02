@@ -633,7 +633,7 @@ def create_app(
         path = data_dir / name
         if not path.exists():
             return None
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
 
     @app.get("/api/experiment")
     def experiment(_: str = Depends(require_token)) -> dict[str, Any]:

@@ -200,17 +200,18 @@ button.indicator:hover { border-color: var(--border); background: var(--surface-
 .page-desc { color: var(--text-2); font-size: 13px; margin-bottom: var(--s-5); max-width: 80ch; }
 
 .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: var(--s-3); }
-.metric { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--s-4) var(--s-4) var(--s-3); box-shadow: var(--shadow-sm); display: grid; gap: 6px; align-content: start; min-height: 104px; }
-.metric .label { font-size: 12px; color: var(--text-2); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.metric .value { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.metric { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--s-4) var(--s-4) var(--s-3); box-shadow: var(--shadow-sm); display: grid; gap: 6px; align-content: start; min-height: 104px; overflow: hidden; }
+.metric .label { font-size: 12px; color: var(--text-2); display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.metric .label > span:first-child { min-width: 0; }
+.metric .value { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.15; font-variant-numeric: tabular-nums; word-break: break-word; }
 .metric .value.md { font-size: 20px; }
-.metric .sub { font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.metric .sub { font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; word-break: break-word; }
 .metric.accent .value { color: var(--accent-text); }
 .metric.danger .value { color: var(--danger-text); }
 .metric.warn .value { color: var(--warn-text); }
 
 /* -- pills / badges -------------------------------------------------------- */
-.pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap; line-height: 1.5; border: 1px solid transparent; }
+.pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap; line-height: 1.5; border: 1px solid transparent; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .pill.success { background: var(--accent-soft); color: var(--accent-text); }
 .pill.warn { background: var(--warn-soft); color: var(--warn-text); }
 .pill.danger { background: var(--danger-soft); color: var(--danger-text); }
@@ -218,7 +219,7 @@ button.indicator:hover { border-color: var(--border); background: var(--surface-
 .pill.neutral { background: var(--neutral-soft); color: var(--text-2); }
 .pill.outline { background: transparent; border-color: var(--border-strong); color: var(--text-2); }
 .pill.upper { text-transform: uppercase; }
-.mode { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; border: 1px solid var(--border-strong); color: var(--text-2); white-space: nowrap; background: var(--surface); }
+.mode { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; border: 1px solid var(--border-strong); color: var(--text-2); white-space: nowrap; background: var(--surface); max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .mode.razorpay_test { color: var(--info-text); border-color: var(--info); background: var(--info-soft); }
 .mode.sandbox { color: var(--text-2); border-color: var(--border-strong); background: var(--neutral-soft); }
 .mode.simulation { color: var(--warn-text); border-color: var(--warn); background: var(--warn-soft); }

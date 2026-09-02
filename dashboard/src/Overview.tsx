@@ -23,10 +23,11 @@ function money0(v: number | null | undefined): string {
 // -- KPI row -----------------------------------------------------------------
 
 /** The provenance badge for a summary, from `summary.context.provenance` (mixed for `all`). */
-export function ProvenanceBadge({ context, source }: { context: SummaryContext | undefined; source: DataSource }) {
+export function ProvenanceBadge({ context, source, short = false }: { context: SummaryContext | undefined; source: DataSource; short?: boolean }) {
   if (!context) return <ModeBadge mode={source === "simulation" ? "simulation" : "observed"} />;
   const mode: Mode = context.source === "all" ? "mixed" : context.rail === "sandbox" ? "simulation" : "observed";
-  return <ModeBadge mode={mode} label={context.provenance} title={`${context.provenance} · brain ${context.brain} · rail ${context.rail} · ${num(context.payments_observed)} payments observed`} />;
+  const label = short ? undefined : context.provenance;
+  return <ModeBadge mode={mode} label={label} title={`${context.provenance} · brain ${context.brain} · rail ${context.rail} · ${num(context.payments_observed)} payments observed`} />;
 }
 
 /** Under a merged KPI: the same figure per ledger. */
@@ -48,7 +49,7 @@ function Kpis({ summary, experiment, source }: { summary: Summary; experiment: L
   const simulationAllowed = source !== "live_test";
   const perNudge = c.recovered_per_attempt_paise ?? (simulationAllowed ? x?.arms.urudhi?.recovered_per_contact_attempt_paise ?? null : null);
   const perNudgeSimulated = c.recovered_per_attempt_paise === null || c.recovered_per_attempt_paise === undefined;
-  const provenance = <ProvenanceBadge context={summary.context} source={source} />;
+  const provenance = <ProvenanceBadge context={summary.context} source={source} short />;
   const split = source === "all" && summary.by_source ? summary.by_source : [];
   const withSplit = (text: ReactNode, pick: (s: SourceSummary) => number) => (
     <>

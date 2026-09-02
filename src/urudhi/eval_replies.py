@@ -43,7 +43,7 @@ COMMITMENT = {"promise", "accept_offer"}
 
 def load_dataset(path: Path) -> list[dict[str, Any]]:
     rows = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         if line.strip():
             rows.append(json.loads(line))
     return rows
@@ -167,7 +167,7 @@ def main() -> None:
     out = args.out or Path(f"data/reply_eval_{args.brain}.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"summary": summary, "failures": failures, "rows": results},
-                              indent=2, ensure_ascii=False) + "\n")
+                              indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print_summary(summary)
     print(f"failures         : {len(failures)} (details in {out})")
 

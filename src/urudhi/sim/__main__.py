@@ -79,7 +79,7 @@ def main() -> None:
     if Arm.URUDHI in results:
         report = build_report(results[Arm.URUDHI])
         args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
+        args.out.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         money, m = report["money"], report["metrics"]
         print(f"batch      : {args.count} invoices, {args.days} days, seed {args.seed}, "
               f"brain {report['run']['brain']}")
@@ -111,7 +111,7 @@ def main() -> None:
                          f"--days {args.days} --count {args.count} --seed {args.seed}",
         )
         args.experiment_out.parent.mkdir(parents=True, exist_ok=True)
-        args.experiment_out.write_text(json.dumps(experiment, indent=2, ensure_ascii=False) + "\n")
+        args.experiment_out.write_text(json.dumps(experiment, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         print()
         print(summarize_for_stdout(experiment))
         print(f"experiment : {args.experiment_out}")

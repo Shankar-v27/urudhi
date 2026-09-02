@@ -46,9 +46,11 @@ function indicator(name: "ai" | "data" | "payment" | "audit"): HTMLElement {
 
 describe("App shell", () => {
   beforeEach(() => {
+    vi.setSystemTime(new Date("2026-08-28T10:00:00+05:30"));
     vi.stubGlobal("fetch", mockFetch(routes));
   });
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
