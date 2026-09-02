@@ -34,6 +34,28 @@ from urudhi.transport.email import EmailOutbox
 log = get_logger("urudhi.api.main")
 
 
+def ensure_sim_db(db_path: str | Path | None) -> None:
+    if not db_path:
+        return
+    path = Path(db_path)
+    if str(path) == ":memory:":
+        return
+    if path.exists() and path.stat().st_size > 0:
+        try:
+            store = Store(str(path))
+            if len(store.all_invoices()) > 0:
+                return
+        except Exception:
+            pass
+    log.info("seeding deterministic simulation ledger", path=str(path))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    from urudhi.agent.brain import MockBrain
+    from urudhi.sim.runner import Arm, RunConfig, run_batch
+
+    config = RunConfig(days=21, count=120, seed=2026, arm=Arm.URUDHI)
+    run_batch(config, brain=MockBrain(), db_path=str(path))
+
+
 def main() -> None:
     load_dotenv(Path.cwd() / ".env")
     parser = argparse.ArgumentParser(prog="python -m urudhi.api")
@@ -66,6 +88,8 @@ def main() -> None:
         rails, rails_mode = FakeRails(), "sandbox"
 
     store = Store(args.db)
+    if args.sim_db:
+        ensure_sim_db(args.sim_db)
     sim_store = Store(args.sim_db) if args.sim_db else None
     origin = None if args.origin == "auto" else args.origin
     if (origin or store.origin()) == "simulation":

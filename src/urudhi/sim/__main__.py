@@ -34,6 +34,10 @@ from urudhi.sim.runner import Arm, RunConfig, run_batch
 
 
 def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(prog="python -m urudhi.sim")
     parser.add_argument("--brain", choices=BRAIN_MODES, default="mock")
     parser.add_argument("--arms", choices=["urudhi", "all", "baseline", "no_action"], default="urudhi")

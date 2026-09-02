@@ -429,4 +429,17 @@ class TestCORS:
             assert get_resp.headers.get("access-control-allow-origin") == "https://urudhi.vercel.app"
             assert get_resp.json()["status"] == "ok"
 
+    def test_ensure_sim_db_seeds_when_empty(self, tmp_path):
+        from urudhi.api.__main__ import ensure_sim_db
+        sim_path = tmp_path / "sim.sqlite3"
+        ensure_sim_db(str(sim_path))
+        assert sim_path.exists()
+        s = Store(str(sim_path))
+        assert len(s.all_invoices()) == 120
+        assert len(s.all_commitments()) == 153
+        # Calling again is idempotent
+        ensure_sim_db(str(sim_path))
+        assert len(s.all_invoices()) == 120
+
+
 
