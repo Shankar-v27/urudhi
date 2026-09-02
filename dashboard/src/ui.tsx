@@ -208,7 +208,7 @@ export function ErrorState({ error, onRetry, notFound }: { error: Error; onRetry
   return (
     <div className="state-box error" role="alert">
       <b>API unreachable</b>
-      <span>{error.message}. Is the backend running on 127.0.0.1:8000?</span>
+      <span>{error.message || "Failed to reach the API server"}</span>
       {retry}
     </div>
   );
