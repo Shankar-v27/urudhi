@@ -76,7 +76,8 @@ def main() -> None:
         app = create_app(
             store, webhook_secret=os.environ.get("RAZORPAY_WEBHOOK_SECRET", ""),
             api_token=os.environ.get("URUDHI_API_TOKEN", ""), agent=agent, policy=policy,
-            cors_origins=[o for o in os.environ.get("URUDHI_CORS_ORIGINS", "").split(",") if o] or None,
+            cors_origins=[o.strip() for o in os.environ.get("URUDHI_CORS_ORIGINS", "").split(",")
+                          if o.strip()] or None,
             brain_name=agent.brain_name, transport_mode=f"email:{outbox.mode}",
             rails_mode=rails_mode, simulation_store=sim_store, store_origin=origin,
             store_path=args.db, simulation_path=args.sim_db or "",

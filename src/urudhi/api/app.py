@@ -120,6 +120,25 @@ class Ledger:
         return None
 
 
+DEFAULT_CORS_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://urudhi.vercel.app",
+]
+
+DEFAULT_CORS_HEADERS = [
+    "Accept",
+    "Accept-Language",
+    "Authorization",
+    "Content-Language",
+    "Content-Type",
+    "X-Razorpay-Signature",
+    "X-Urudhi-Token",
+]
+
+DEFAULT_CORS_METHODS = ["GET", "POST", "OPTIONS"]
+
+
 def create_app(
     store: Store,
     *,
@@ -181,9 +200,9 @@ def create_app(
     app = FastAPI(title="Urudhi", version=__version__)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=cors_origins or ["http://localhost:5173", "http://127.0.0.1:5173"],
-        allow_methods=["GET", "POST"], allow_headers=["Authorization", "Content-Type",
-                                                      "X-Urudhi-Token", "X-Razorpay-Signature"],
+        allow_origins=cors_origins if cors_origins is not None else DEFAULT_CORS_ORIGINS,
+        allow_methods=DEFAULT_CORS_METHODS,
+        allow_headers=DEFAULT_CORS_HEADERS,
     )
 
     @app.middleware("http")

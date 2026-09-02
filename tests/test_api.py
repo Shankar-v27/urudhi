@@ -348,3 +348,64 @@ class TestTwoLedgers:
         assert one["source"] == "simulation" and one["chain"]["id"] == cid and one["audit_chain"]["verified"]
         assert c.get("/api/commitments/cmt_none", headers=AUTH).json()["detail"] == \
             "No matching commitment in current data source"
+
+
+class TestCORS:
+    def test_options_preflight_vercel_origin(self, client):
+        resp = client.options(
+            "/api/summary?source=all",
+            headers={
+                "Origin": "https://urudhi.vercel.app",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.headers.get("access-control-allow-origin") == "https://urudhi.vercel.app"
+        assert "GET" in resp.headers.get("access-control-allow-methods", "")
+        allowed_headers = resp.headers.get("access-control-allow-headers", "").lower()
+        assert "authorization" in allowed_headers
+        assert "content-type" in allowed_headers
+
+    def test_options_preflight_localhost_origins(self, client):
+        for origin in ("http://localhost:5173", "http://127.0.0.1:5173"):
+            resp = client.options(
+                "/api/summary?source=all",
+                headers={
+                    "Origin": origin,
+                    "Access-Control-Request-Method": "GET",
+                    "Access-Control-Request-Headers": "authorization,content-type",
+                },
+            )
+            assert resp.status_code == 200
+            assert resp.headers.get("access-control-allow-origin") == origin
+
+    def test_options_preflight_disallowed_origin(self, client):
+        resp = client.options(
+            "/api/summary?source=all",
+            headers={
+                "Origin": "https://unauthorized.site",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+        assert resp.status_code == 400 or resp.headers.get("access-control-allow-origin") is None
+
+    def test_authenticated_get_with_cors(self, client):
+        # Unauthenticated request from allowed origin still returns 401 but includes CORS headers
+        unauth = client.get(
+            "/api/summary?source=all",
+            headers={"Origin": "https://urudhi.vercel.app"},
+        )
+        assert unauth.status_code == 401
+        assert unauth.headers.get("access-control-allow-origin") == "https://urudhi.vercel.app"
+
+        # Authenticated request from allowed origin succeeds and includes CORS headers
+        auth_resp = client.get(
+            "/api/summary?source=all",
+            headers={"Origin": "https://urudhi.vercel.app", **AUTH},
+        )
+        assert auth_resp.status_code == 200
+        assert auth_resp.headers.get("access-control-allow-origin") == "https://urudhi.vercel.app"
+        assert "invoices" in auth_resp.json()
+
