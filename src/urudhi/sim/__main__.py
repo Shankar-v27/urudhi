@@ -111,7 +111,9 @@ def main() -> None:
                          f"--days {args.days} --count {args.count} --seed {args.seed}",
         )
         args.experiment_out.parent.mkdir(parents=True, exist_ok=True)
-        args.experiment_out.write_text(json.dumps(experiment, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        args.experiment_out.write_text(
+            json.dumps(experiment, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
         print()
         print(summarize_for_stdout(experiment))
         print(f"experiment : {args.experiment_out}")

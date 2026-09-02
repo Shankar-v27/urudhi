@@ -35,18 +35,18 @@ log = get_logger("urudhi.api.main")
 
 
 def main() -> None:
+    load_dotenv(Path.cwd() / ".env")
     parser = argparse.ArgumentParser(prog="python -m urudhi.api")
     parser.add_argument("--db", default="urudhi.sqlite3", help="primary (live test-mode) ledger")
     parser.add_argument("--sim-db", default=None, help="simulation ledger written by python -m urudhi.sim")
     parser.add_argument("--origin", choices=["auto", "live_test", "simulation"], default="auto",
                         help="provenance label for --db rows (auto: simulation if the batch runner wrote it)")
     parser.add_argument("--brain", choices=BRAIN_MODES, default="mock")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--host", default=os.getenv("HOST", "0.0.0.0"))
+    parser.add_argument("--port", type=int, default=int(os.getenv("PORT", "8000")))
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
 
-    load_dotenv(Path.cwd() / ".env")
     configure_logging(args.log_level)
     for line in format_presence_report().splitlines():
         log.info("config " + line)
