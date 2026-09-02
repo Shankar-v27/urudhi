@@ -191,9 +191,26 @@ export function headerFacts(h: Health, source: DataSource): HeaderFacts {
   };
 }
 
-function HealthIndicators({ health, source }: { health: { data: Health | null; error: Error | null }; source: DataSource }) {
+function HealthIndicators({ health, source }: { health: { data: Health | null; error: Error | null; reload?: () => void }; source: DataSource }) {
   const [open, setOpen] = useState(false);
-  if (health.error) return <span className="indicator bad"><span className="led" />API unreachable</span>;
+  if (health.error) {
+    return (
+      <span className="indicator bad" title={health.error.message}>
+        <span className="led" />API unreachable
+        {health.reload && (
+          <button
+            type="button"
+            className="btn xs ghost"
+            style={{ marginLeft: 6, padding: "0 4px", height: "auto", fontSize: 11 }}
+            onClick={health.reload}
+            title="Retry health check"
+          >
+            Retry
+          </button>
+        )}
+      </span>
+    );
+  }
   if (!health.data) return <span className="indicator"><span className="led" />Checking health…</span>;
   const h = health.data;
   const ok = h.status === "ok";
@@ -242,14 +259,20 @@ function HealthIndicators({ health, source }: { health: { data: Health | null; e
 
 // -- workspace ----------------------------------------------------------------------
 
-function Workspace({ route, navigate, token, source }: {
-  route: Route; navigate: (tab: Tab, id?: string | null) => void; token: string; source: DataSource;
+function Workspace({ route, navigate, token, source, onApiSuccess }: {
+  route: Route; navigate: (tab: Tab, id?: string | null) => void; token: string; source: DataSource; onApiSuccess?: () => void;
 }) {
   const summary = useLoad(() => api.summary(source), [source]);
   const invoices = useLoad(() => api.invoices(source), [source]);
   const openInvoice = (id: string) => navigate("invoices", id);
   const openCommitment = (id: string) => navigate("commitments", id);
   const close = () => navigate(route.tab);
+
+  useEffect(() => {
+    if (summary.data || invoices.data) {
+      onApiSuccess?.();
+    }
+  }, [summary.data, invoices.data, onApiSuccess]);
 
   return (
     <>
@@ -312,7 +335,7 @@ export default function App() {
         </div>
       </header>
       <main key={generation}>
-        <Workspace route={route} navigate={navigate} token={token} source={source} />
+        <Workspace route={route} navigate={navigate} token={token} source={source} onApiSuccess={health.error ? health.reload : undefined} />
       </main>
     </SourceContext.Provider>
   );

@@ -267,6 +267,7 @@ def create_app(
     # -- health -------------------------------------------------------------
 
     @app.get("/health")
+    @app.get("/api/health")
     def health() -> dict[str, Any]:
         chains = [{"source": lg.origin, "db": lg.path, "invoices": len(lg.store.all_invoices()),
                    "audit_chain": lg.chain(), "brain": lg.brain()} for lg in ledgers]

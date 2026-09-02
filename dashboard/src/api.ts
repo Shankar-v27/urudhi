@@ -764,7 +764,7 @@ const post = <T,>(path: string, body: unknown) =>
 
 /** Every list endpoint takes the selected data source; detail endpoints look across both ledgers. */
 export const api = {
-  health: () => get<Health>("/health"),
+  health: () => get<Health>("/health").catch(() => get<Health>("/api/health")),
   summary: (source: DataSource = "all") => get<Summary>(withSource("/api/summary", source)),
   timeline: (source: DataSource = "all") => get<Timeline>(withSource("/api/timeline", source)),
   invoices: (source: DataSource = "all") => get<Invoice[]>(withSource("/api/invoices", source)),

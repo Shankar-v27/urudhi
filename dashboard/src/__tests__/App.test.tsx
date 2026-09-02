@@ -293,4 +293,27 @@ describe("App shell", () => {
     expect(apiUrl("api/commitments", "https://urudhi.onrender.com")).toBe("https://urudhi.onrender.com/api/commitments");
     expect(apiUrl("https://other.example.com/api", "https://urudhi.onrender.com")).toBe("https://other.example.com/api");
   });
+
+  it("recovers from initial health failure when workspace API requests succeed", async () => {
+    let healthCallCount = 0;
+    const baseMock = mockFetch(routes);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("/health")) {
+        healthCallCount++;
+        if (healthCallCount === 1) {
+          throw new TypeError("Failed to fetch");
+        }
+      }
+      return baseMock(input, init);
+    }));
+    window.localStorage.setItem(TOKEN_KEY, TOKEN);
+    window.location.hash = "#/overview";
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Claude")).toBeInTheDocument();
+      expect(screen.queryByText("API unreachable")).not.toBeInTheDocument();
+    });
+  });
 });

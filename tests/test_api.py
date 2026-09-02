@@ -409,3 +409,24 @@ class TestCORS:
         assert auth_resp.headers.get("access-control-allow-origin") == "https://urudhi.vercel.app"
         assert "invoices" in auth_resp.json()
 
+    def test_health_and_api_health_endpoints_cors(self, client):
+        for path in ("/health", "/api/health"):
+            # Preflight
+            pre = client.options(
+                path,
+                headers={
+                    "Origin": "https://urudhi.vercel.app",
+                    "Access-Control-Request-Method": "GET",
+                    "Access-Control-Request-Headers": "authorization,content-type",
+                },
+            )
+            assert pre.status_code == 200
+            assert pre.headers.get("access-control-allow-origin") == "https://urudhi.vercel.app"
+
+            # Direct unauthenticated GET with Origin
+            get_resp = client.get(path, headers={"Origin": "https://urudhi.vercel.app"})
+            assert get_resp.status_code == 200
+            assert get_resp.headers.get("access-control-allow-origin") == "https://urudhi.vercel.app"
+            assert get_resp.json()["status"] == "ok"
+
+
