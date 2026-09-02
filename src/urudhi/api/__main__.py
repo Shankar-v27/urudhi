@@ -21,13 +21,13 @@ from pathlib import Path
 import uvicorn
 from dotenv import load_dotenv
 
-from urudhi.agent.brain import BRAIN_MODES, BrainConfigError, make_brain
+from urudhi.agent.brain import BRAIN_MODES, Brain, BrainConfigError, make_brain
 from urudhi.agent.loop import RecoveryAgent
 from urudhi.agent.policy import PolicyConfig
 from urudhi.api.app import create_app
 from urudhi.config import format_presence_report
 from urudhi.observability import configure_logging, get_logger
-from urudhi.rails.razorpay_client import FakeRails, RazorpayRails
+from urudhi.rails.razorpay_client import FakeRails, RailsClient, RazorpayRails
 from urudhi.store import Store
 from urudhi.transport.email import EmailOutbox
 
@@ -56,6 +56,22 @@ def ensure_sim_db(db_path: str | Path | None) -> None:
     run_batch(config, brain=MockBrain(), db_path=str(path))
 
 
+def ensure_live_fixtures(store: Store, brain: Brain, rails: RailsClient, policy: PolicyConfig) -> None:
+    seed_env = os.environ.get("URUDHI_SEED_LIVE_FIXTURES", "").lower().strip()
+    if seed_env not in ("true", "1", "yes", "auto"):
+        return
+    if len(store.all_invoices()) > 0:
+        log.info("live demo ledger already populated, skipping fixture seeding")
+        return
+    log.info("seeding live demo fixtures into empty ledger")
+    try:
+        from urudhi.provision import seed_live_fixtures
+        seed_live_fixtures(store, brain, rails, policy.timezone)
+        log.info("live demo fixtures seeded successfully", count=len(store.all_invoices()))
+    except Exception as e:
+        log.error("failed to seed live demo fixtures, continuing API startup", error=str(e))
+
+
 def main() -> None:
     load_dotenv(Path.cwd() / ".env")
     parser = argparse.ArgumentParser(prog="python -m urudhi.api")
@@ -66,6 +82,9 @@ def main() -> None:
     parser.add_argument("--brain", choices=BRAIN_MODES, default="mock")
     parser.add_argument("--host", default=os.getenv("HOST", "0.0.0.0"))
     parser.add_argument("--port", type=int, default=int(os.getenv("PORT", "8000")))
+    parser.add_argument("--public-readonly", action="store_true",
+                        default=os.getenv("URUDHI_PUBLIC_READONLY", "").lower() in ("true", "1", "yes"),
+                        help="enable unauthenticated read-only access to GET endpoints for public demo")
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
 
@@ -88,10 +107,12 @@ def main() -> None:
         rails, rails_mode = FakeRails(), "sandbox"
 
     store = Store(args.db)
+    origin = None if args.origin == "auto" else args.origin
+    if (origin or store.origin()) != "simulation":
+        ensure_live_fixtures(store, brain, rails, policy)
     if args.sim_db:
         ensure_sim_db(args.sim_db)
     sim_store = Store(args.sim_db) if args.sim_db else None
-    origin = None if args.origin == "auto" else args.origin
     if (origin or store.origin()) == "simulation":
         # A simulated ledger is never driven by the real rail: replies/ticks on it stay sandboxed.
         rails, rails_mode = FakeRails(), "sandbox"
@@ -105,6 +126,7 @@ def main() -> None:
             brain_name=agent.brain_name, transport_mode=f"email:{outbox.mode}",
             rails_mode=rails_mode, simulation_store=sim_store, store_origin=origin,
             store_path=args.db, simulation_path=args.sim_db or "",
+            public_readonly=args.public_readonly,
         )
     except RuntimeError as error:
         print(f"error: {error}", file=sys.stderr)

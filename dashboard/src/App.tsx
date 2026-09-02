@@ -99,17 +99,49 @@ function useDataSource(): [DataSource, (next: DataSource) => void] {
   return [source, setSource];
 }
 
-// -- header ---------------------------------------------------------------------
+// -- header -------------------------------------------------------------------
 
-function TokenForm({ token, onConnect }: { token: string; onConnect: (token: string) => void }) {
+function TokenForm({ token, onConnect, publicReadonly }: {
+  token: string; onConnect: (token: string) => void; publicReadonly?: boolean;
+}) {
   const [draft, setDraft] = useState("");
+  const [showInput, setShowInput] = useState(false);
+
+  if (publicReadonly && !token && !showInput) {
+    return (
+      <div className="connect">
+        <span className="connected" title="Public demo mode · Read-only access enabled">
+          <span className="led" style={{ width: 8, height: 8, borderRadius: 999, background: "var(--accent)", display: "inline-block" }} />
+          Public demo · Read-only
+        </span>
+        <button
+          type="button"
+          className="btn xs ghost"
+          onClick={() => setShowInput(true)}
+          title="Connect with operator token for mutation access"
+          style={{ fontSize: 11, padding: "2px 6px" }}
+        >
+          Operator login
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <form className="connect" onSubmit={(e) => { e.preventDefault(); if (draft.trim()) onConnect(draft.trim()); setDraft(""); }}>
-      {token && <span className="connected" title="A bearer token is stored in this browser"><span className="led" style={{ width: 8, height: 8, borderRadius: 999, background: "var(--accent)", display: "inline-block" }} />Connected</span>}
+    <form className="connect" onSubmit={(e) => { e.preventDefault(); if (draft.trim()) onConnect(draft.trim()); setDraft(""); setShowInput(false); }}>
+      {token && (
+        <span className="connected" title="A bearer token is stored in this browser">
+          <span className="led" style={{ width: 8, height: 8, borderRadius: 999, background: "var(--accent)", display: "inline-block" }} />
+          Connected
+        </span>
+      )}
       <input type="password" placeholder={token ? "Replace token" : "URUDHI_API_TOKEN"} value={draft}
         onChange={(e) => setDraft(e.target.value)} autoComplete="off" aria-label="API token" />
       <button type="submit" className="btn sm" disabled={!draft.trim()}>{token ? "Reconnect" : "Connect"}</button>
       {token && <button type="button" className="btn sm ghost" onClick={() => onConnect("")} aria-label="Forget stored token">Forget</button>}
+      {publicReadonly && !token && showInput && (
+        <button type="button" className="btn sm ghost" onClick={() => setShowInput(false)}>Cancel</button>
+      )}
     </form>
   );
 }
@@ -259,8 +291,8 @@ function HealthIndicators({ health, source }: { health: { data: Health | null; e
 
 // -- workspace ----------------------------------------------------------------------
 
-function Workspace({ route, navigate, token, source, onApiSuccess }: {
-  route: Route; navigate: (tab: Tab, id?: string | null) => void; token: string; source: DataSource; onApiSuccess?: () => void;
+function Workspace({ route, navigate, token, source, onApiSuccess, publicReadonly }: {
+  route: Route; navigate: (tab: Tab, id?: string | null) => void; token: string; source: DataSource; onApiSuccess?: () => void; publicReadonly?: boolean;
 }) {
   const summary = useLoad(() => api.summary(source), [source]);
   const invoices = useLoad(() => api.invoices(source), [source]);
@@ -276,7 +308,7 @@ function Workspace({ route, navigate, token, source, onApiSuccess }: {
 
   return (
     <>
-      {!token && (
+      {!token && !publicReadonly && (
         <div className="note warn" style={{ marginBottom: 16 }} role="status">
           Not connected. Paste the value of <code>URUDHI_API_TOKEN</code> into the Connect field in the header — every <code>/api</code> request is bearer-token protected.
         </div>
@@ -312,6 +344,7 @@ export default function App() {
     setGeneration((g) => g + 1);
   };
   const sourceState = useMemo(() => ({ source, setSource }), [source, setSource]);
+  const publicReadonly = Boolean(health.data?.public_readonly);
 
   return (
     <SourceContext.Provider value={sourceState}>
@@ -326,7 +359,7 @@ export default function App() {
           </div>
           <div className="health"><HealthIndicators health={health} source={source} /></div>
           <SourceSelector source={source} onChange={setSource} />
-          <TokenForm token={token} onConnect={connect} />
+          <TokenForm token={token} onConnect={connect} publicReadonly={publicReadonly} />
           <nav className="tabs" aria-label="Sections">
             {TABS.map((t) => (
               <a key={t.id} href={hashFor(t.id, null, source)} aria-current={route.tab === t.id ? "page" : undefined}>{t.label}</a>
@@ -335,7 +368,14 @@ export default function App() {
         </div>
       </header>
       <main key={generation}>
-        <Workspace route={route} navigate={navigate} token={token} source={source} onApiSuccess={health.error ? health.reload : undefined} />
+        <Workspace
+          route={route}
+          navigate={navigate}
+          token={token}
+          source={source}
+          onApiSuccess={health.error ? health.reload : undefined}
+          publicReadonly={publicReadonly}
+        />
       </main>
     </SourceContext.Provider>
   );

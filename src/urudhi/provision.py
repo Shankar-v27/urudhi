@@ -22,19 +22,68 @@ import argparse
 import os
 import sys
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Any
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
+from urudhi.agent.brain import Brain
 from urudhi.agent.instruments import issue_instrument
+from urudhi.agent.loop import RecoveryAgent
+from urudhi.agent.policy import PolicyConfig
 from urudhi.audit.log import Actor
 from urudhi.config import format_presence_report
-from urudhi.ledger.models import InstrumentMode, PaymentCommitment
-from urudhi.ledger.money import format_inr
+from urudhi.ledger.models import Channel, Debtor, InstrumentMode, Invoice, PaymentCommitment
+from urudhi.ledger.money import format_inr, rupees
 from urudhi.observability import configure_logging
 from urudhi.rails.razorpay_client import RailsClient, RazorpayRails
 from urudhi.store import Store
+from urudhi.transport.email import EmailOutbox
+
+FIXTURES: list[tuple[str, str, str, str, int, str]] = [
+    ("kumar", "Kumar Textiles", "Kumar", "ta", 50_000,
+     "Cash konjam tight ah iruku. Friday 20000 kudukuren, balance adutha vaaram."),
+    ("sharma", "Sharma Auto Components", "Rajesh", "hi", 40_000,
+     "Bhai next Monday tak pura 40000 kar dunga pakka."),
+    ("meridian", "Meridian Packaging", "Anita", "en", 30_000,
+     "Apologies for the delay — will transfer ₹15,000 in 3 days and the rest by month end."),
+    ("salem", "Salem Steel Syndicate", "Ravi", "ta", 45_000,
+     "Sari sir, 12000 by Wednesday pannidren."),
+    ("coimbatore", "Coimbatore Pumps & Motors", "Suresh", "en", 80_000,
+     "Will clear the full 80,000 by Friday."),
+    ("erode", "Erode Dyeing Works", "Divya", "hi", 25_000,
+     "Diwali ke baad, 60 din mein pura de denge."),
+]
+
+
+def seed_live_fixtures(store: Store, brain: Brain, rails: RailsClient,
+                       timezone: str = "Asia/Kolkata") -> list[dict[str, Any]]:
+    tz = ZoneInfo(timezone)
+    agent = RecoveryAgent(store, brain, EmailOutbox.from_env(), PolicyConfig(timezone=str(tz)), rails=rails)
+    run_id = datetime.now(tz).strftime("%Y%m%d%H%M%S")
+    now = datetime.now(UTC)
+    results = []
+    for slug, name, contact, lang, amount, reply in FIXTURES:
+        debtor = Debtor(id=f"deb_live_{slug}_{run_id}", name=name, contact_name=contact,
+                        phone="+919800000001", email="void@razorpay.com",
+                        preferred_channel=Channel.EMAIL, language=lang)
+        invoice = Invoice(id=f"inv_live_{slug}_{run_id}", debtor_id=debtor.id,
+                          number=f"URU/2026/L{slug[:3].upper()}{run_id[-4:]}", amount=rupees(amount),
+                          issued_on=date.today() - timedelta(days=60),
+                          due_on=date.today() - timedelta(days=30))
+        store.put_debtor(debtor)
+        store.put_invoice(invoice)
+        res = agent.handle_reply(invoice.id, reply, now)
+        results.append({
+            "invoice_id": invoice.id,
+            "invoice_number": invoice.number,
+            "debtor_name": name,
+            "action": res.action,
+            "commitment_id": res.commitment_id,
+        })
+    return results
 
 
 @dataclass

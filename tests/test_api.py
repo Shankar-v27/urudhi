@@ -441,5 +441,154 @@ class TestCORS:
         ensure_sim_db(str(sim_path))
         assert len(s.all_invoices()) == 120
 
+    def test_ensure_live_fixtures_seeds_when_enabled(self, tmp_path, monkeypatch):
+        from urudhi.agent.brain import MockBrain
+        from urudhi.agent.policy import PolicyConfig
+        from urudhi.api.__main__ import ensure_live_fixtures
+        from urudhi.rails.razorpay_client import FakeRails
+
+        db_path = tmp_path / "live.sqlite3"
+        store = Store(str(db_path))
+        brain = MockBrain()
+        rails = FakeRails()
+        policy = PolicyConfig()
+
+        # Without env var, does not seed
+        monkeypatch.delenv("URUDHI_SEED_LIVE_FIXTURES", raising=False)
+        ensure_live_fixtures(store, brain, rails, policy)
+        assert len(store.all_invoices()) == 0
+
+        # With env var enabled, seeds fixtures
+        monkeypatch.setenv("URUDHI_SEED_LIVE_FIXTURES", "true")
+        ensure_live_fixtures(store, brain, rails, policy)
+        assert len(store.all_invoices()) == 6
+        assert len(store.all_commitments()) == 5
+        # No fake payments created
+        assert len(store.all_payments()) == 0
+        for inv in store.all_invoices():
+            assert inv.amount_paid == 0
+
+        # Idempotent: does not duplicate on second run
+        ensure_live_fixtures(store, brain, rails, policy)
+        assert len(store.all_invoices()) == 6
+
+    def test_ensure_live_fixtures_failure_resilience(self, tmp_path, monkeypatch):
+        from urudhi.agent.brain import MockBrain
+        from urudhi.agent.policy import PolicyConfig
+        from urudhi.api.__main__ import ensure_live_fixtures
+
+        class ExplodingRails:
+            def create_payment_link(self, *args, **kwargs):
+                raise RuntimeError("Razorpay temporary rate limit")
+
+        monkeypatch.setenv("URUDHI_SEED_LIVE_FIXTURES", "true")
+        db_path = tmp_path / "live_fail.sqlite3"
+        store = Store(str(db_path))
+        # Failure does not raise an unhandled exception
+        ensure_live_fixtures(store, MockBrain(), ExplodingRails(), PolicyConfig())
+
+
+class TestPublicReadonly:
+    @pytest.fixture
+    def public_client(self, tmp_path):
+        from urudhi.agent.brain import MockBrain
+        from urudhi.api.app import create_app
+        from urudhi.provision import seed_live_fixtures
+        from urudhi.rails.razorpay_client import FakeRails
+        from urudhi.sim.runner import Arm, RunConfig, run_batch
+
+        live_db = tmp_path / "live.sqlite3"
+        sim_db = tmp_path / "sim.sqlite3"
+        live_store = Store(str(live_db))
+        sim_store = Store(str(sim_db))
+
+        # Seed both stores
+        run_batch(RunConfig(days=21, count=120, seed=2026, arm=Arm.URUDHI), brain=MockBrain(), db_path=str(sim_db))
+        seed_live_fixtures(live_store, MockBrain(), FakeRails())
+
+        app = create_app(
+            live_store,
+            webhook_secret="test_secret_12345",
+            api_token="test_token_12345",
+            simulation_store=sim_store,
+            public_readonly=True,
+        )
+        return TestClient(app)
+
+    def test_public_get_endpoints_succeed_unauthenticated(self, public_client):
+        # Health
+        h = public_client.get("/api/health")
+        assert h.status_code == 200
+        assert h.json()["public_readonly"] is True
+
+        # Across all three sources
+        for src in ("all", "simulation", "live_test"):
+            summary = public_client.get(f"/api/summary?source={src}")
+            assert summary.status_code == 200
+            assert "invoices" in summary.json()
+
+            invoices = public_client.get(f"/api/invoices?source={src}")
+            assert invoices.status_code == 200
+            assert len(invoices.json()) > 0
+
+            commitments = public_client.get(f"/api/commitments?source={src}")
+            assert commitments.status_code == 200
+
+            promises = public_client.get(f"/api/promises?source={src}")
+            assert promises.status_code == 200
+
+            escalations = public_client.get(f"/api/escalations?source={src}")
+            assert escalations.status_code == 200
+
+            timeline = public_client.get(f"/api/timeline?source={src}")
+            assert timeline.status_code == 200
+
+        # Detail endpoints
+        invs = public_client.get("/api/invoices?source=all").json()
+        inv_id = invs[0]["id"]
+        assert public_client.get(f"/api/invoices/{inv_id}").status_code == 200
+        assert public_client.get(f"/api/invoices/{inv_id}/explain").status_code == 200
+        assert public_client.get(f"/api/invoices/{inv_id}/commitments").status_code == 200
+
+    def test_mutations_remain_rejected_unauthenticated(self, public_client):
+        # Human action
+        invs = public_client.get("/api/invoices?source=live_test").json()
+        inv_id = invs[0]["id"]
+        res = public_client.post(f"/api/invoices/{inv_id}/human", json={"action": "note", "operator": "anon", "notes": "test"})
+        assert res.status_code == 401
+
+        # Inbound reply
+        res = public_client.post("/inbound/reply", json={"invoice_id": inv_id, "text": "I will pay"})
+        assert res.status_code == 401
+
+        # Scheduler tick
+        res = public_client.post("/api/run/tick", json={})
+        assert res.status_code == 401
+
+    def test_no_secrets_exposed_in_public_endpoints(self, public_client):
+        h = public_client.get("/api/health").json()
+        assert "test_secret_12345" not in json.dumps(h)
+        assert "test_token_12345" not in json.dumps(h)
+
+        s = public_client.get("/api/summary?source=all").json()
+        assert "test_secret_12345" not in json.dumps(s)
+        assert "test_token_12345" not in json.dumps(s)
+
+    def test_public_readonly_false_preserves_token_requirement(self, tmp_path):
+        from urudhi.api.app import create_app
+        store = Store(str(tmp_path / "live.sqlite3"))
+        app = create_app(store, webhook_secret="sec_12345", api_token="tok_12345", public_readonly=False)
+        client = TestClient(app)
+
+        # Unauthenticated request fails with 401
+        res = client.get("/api/summary?source=all")
+        assert res.status_code == 401
+
+        # Authenticated succeeds
+        res = client.get("/api/summary?source=all", headers={"Authorization": "Bearer tok_12345"})
+        assert res.status_code == 200
+
+
+
 
 

@@ -316,4 +316,17 @@ describe("App shell", () => {
       expect(screen.queryByText("API unreachable")).not.toBeInTheDocument();
     });
   });
+
+  it("displays public demo read-only indicator and omits warning banner when public_readonly is true", async () => {
+    vi.stubGlobal("fetch", mockFetch({
+      ...routes,
+      "/health": { ...health, public_readonly: true },
+    }));
+    window.localStorage.removeItem(TOKEN_KEY);
+    window.location.hash = "#/overview";
+    render(<App />);
+
+    expect(await screen.findByText("Public demo · Read-only")).toBeInTheDocument();
+    expect(screen.queryByText("Not connected")).not.toBeInTheDocument();
+  });
 });

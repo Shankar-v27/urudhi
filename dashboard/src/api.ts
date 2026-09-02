@@ -430,6 +430,7 @@ export interface Health {
   sources?: RowSource[];
   ledgers?: Ledger[];
   counters: Record<string, number>;
+  public_readonly?: boolean;
 }
 
 export interface Gate {

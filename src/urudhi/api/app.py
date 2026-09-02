@@ -156,6 +156,7 @@ def create_app(
     store_origin: str | None = None,
     store_path: str = "",
     simulation_path: str = "",
+    public_readonly: bool = False,
 ) -> FastAPI:
     if not webhook_secret or not webhook_secret.strip():
         raise RuntimeError(
@@ -215,6 +216,17 @@ def create_app(
                  status=response.status_code, ms=round((time.perf_counter() - started) * 1000))
         counters.inc("http.requests")
         return response
+
+    def require_read_access(request: Request) -> str:
+        if public_readonly:
+            return "public"
+        header = request.headers.get("authorization", "")
+        token = header[7:] if header.lower().startswith("bearer ") else request.headers.get(
+            "x-urudhi-token", "")
+        if not token or token != api_token:
+            counters.inc("http.unauthorized")
+            raise HTTPException(status_code=401, detail="missing or invalid API token")
+        return "operator"
 
     def require_token(request: Request) -> str:
         header = request.headers.get("authorization", "")
@@ -283,6 +295,7 @@ def create_app(
             "ledgers": chains,
             "sources": [lg.origin for lg in ledgers],
             "counters": counters.snapshot(),
+            "public_readonly": public_readonly,
         }
 
     # -- rails --------------------------------------------------------------
@@ -379,7 +392,7 @@ def create_app(
     # -- read API -----------------------------------------------------------
 
     @app.get("/api/invoices")
-    def invoices(source: str = source_param, _: str = Depends(require_token)) -> list[dict[str, Any]]:
+    def invoices(source: str = source_param, _: str = Depends(require_read_access)) -> list[dict[str, Any]]:
         out = []
         for lg in selected(source):
             debtors = {d.id: d for d in lg.store.all_debtors()}
@@ -387,7 +400,7 @@ def create_app(
         return out
 
     @app.get("/api/invoices/{invoice_id}")
-    def invoice_detail(invoice_id: str, _: str = Depends(require_token)) -> dict[str, Any]:
+    def invoice_detail(invoice_id: str, _: str = Depends(require_read_access)) -> dict[str, Any]:
         lg = owner(invoice_id)
         st = lg.store
         invoice = st.get_invoice(invoice_id)
@@ -407,7 +420,7 @@ def create_app(
         }
 
     @app.get("/api/invoices/{invoice_id}/explain")
-    def invoice_explain(invoice_id: str, _: str = Depends(require_token)) -> dict[str, Any]:
+    def invoice_explain(invoice_id: str, _: str = Depends(require_read_access)) -> dict[str, Any]:
         return explain_invoice(owner(invoice_id).store, invoice_id, policy, datetime.now(UTC))
 
     @app.post("/api/invoices/{invoice_id}/human")
@@ -421,7 +434,8 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(error)) from error
 
     @app.get("/api/escalations")
-    def escalations(source: str = source_param, _: str = Depends(require_token)) -> list[dict[str, Any]]:
+    def escalations(source: str = source_param,
+                    _: str = Depends(require_read_access)) -> list[dict[str, Any]]:
         out = []
         for lg in selected(source):
             debtors = {d.id: d.name for d in lg.store.all_debtors()}
@@ -433,7 +447,8 @@ def create_app(
         return out
 
     @app.get("/api/promises")
-    def promises(source: str = source_param, _: str = Depends(require_token)) -> list[dict[str, Any]]:
+    def promises(source: str = source_param,
+                 _: str = Depends(require_read_access)) -> list[dict[str, Any]]:
         out = []
         for lg in selected(source):
             numbers = {i.id: i.number for i in lg.store.all_invoices()}
@@ -449,7 +464,8 @@ def create_app(
         return out
 
     @app.get("/api/commitments")
-    def commitments(source: str = source_param, _: str = Depends(require_token)) -> list[dict[str, Any]]:
+    def commitments(source: str = source_param,
+                    _: str = Depends(require_read_access)) -> list[dict[str, Any]]:
         out = []
         for lg in selected(source):
             numbers = {i.id: i.number for i in lg.store.all_invoices()}
@@ -459,7 +475,7 @@ def create_app(
         return out
 
     @app.get("/api/commitments/{commitment_id}")
-    def commitment_detail(commitment_id: str, _: str = Depends(require_token)) -> dict[str, Any]:
+    def commitment_detail(commitment_id: str, _: str = Depends(require_read_access)) -> dict[str, Any]:
         """One commitment with its provenance chain, wherever it lives."""
         lg, c = owner_of_commitment(commitment_id)
         st = lg.store
@@ -477,7 +493,7 @@ def create_app(
         }
 
     @app.get("/api/invoices/{invoice_id}/commitments")
-    def invoice_commitments(invoice_id: str, _: str = Depends(require_token)) -> dict[str, Any]:
+    def invoice_commitments(invoice_id: str, _: str = Depends(require_read_access)) -> dict[str, Any]:
         """The provenance chain — said → understood → allowed → instrument → rail → outcome."""
         lg = owner(invoice_id)
         st = lg.store
@@ -497,7 +513,8 @@ def create_app(
         }
 
     @app.get("/api/concessions")
-    def concessions(source: str = source_param, _: str = Depends(require_token)) -> list[dict[str, Any]]:
+    def concessions(source: str = source_param,
+                    _: str = Depends(require_read_access)) -> list[dict[str, Any]]:
         out = []
         for lg in selected(source):
             out.extend(tagged(lg, lg.store.all_concessions()))
@@ -505,7 +522,7 @@ def create_app(
 
     @app.get("/api/audit")
     def audit(offset: int = 0, limit: int = 200, source: str = source_param,
-              _: str = Depends(require_token)) -> dict[str, Any]:
+              _: str = Depends(require_read_access)) -> dict[str, Any]:
         chosen = selected(source)
         chains = {lg.origin: lg.chain() for lg in chosen}
         verified = all(c["verified"] for c in chains.values())
@@ -578,12 +595,12 @@ def create_app(
                 "audit_events": chain.get("events", 0), "chain_verified": chain["verified"],
                 "provenance": ("Simulation · persona model · webhook-shaped events"
                                if lg.origin == "simulation" else
-                               "Razorpay Test Mode · observed via signed webhook"),
+                                "Razorpay Test Mode · observed via signed webhook"),
             },
         }
 
     @app.get("/api/summary")
-    def summary(source: str = source_param, _: str = Depends(require_token)) -> dict[str, Any]:
+    def summary(source: str = source_param, _: str = Depends(require_read_access)) -> dict[str, Any]:
         parts = [ledger_summary(lg) for lg in selected(source)]
         if not parts:
             raise HTTPException(status_code=404, detail=f"no ledger for source {source!r}")
@@ -626,7 +643,7 @@ def create_app(
         return merged
 
     @app.get("/api/timeline")
-    def timeline(source: str = source_param, _: str = Depends(require_token)) -> dict[str, Any]:
+    def timeline(source: str = source_param, _: str = Depends(require_read_access)) -> dict[str, Any]:
         """Cumulative recovered paise and messages sent per calendar day, per source."""
         out: dict[str, Any] = {"series": [], "by_source": {}}
         for lg in selected(source):
@@ -656,7 +673,7 @@ def create_app(
         return json.loads(path.read_text(encoding="utf-8"))
 
     @app.get("/api/experiment")
-    def experiment(_: str = Depends(require_token)) -> dict[str, Any]:
+    def experiment(_: str = Depends(require_read_access)) -> dict[str, Any]:
         data = _json_file("experiment.json")
         if data is None:
             raise HTTPException(status_code=404,
@@ -664,7 +681,7 @@ def create_app(
         return data | {"source": "simulation"}
 
     @app.get("/api/reply-eval")
-    def reply_eval(_: str = Depends(require_token)) -> dict[str, Any]:
+    def reply_eval(_: str = Depends(require_read_access)) -> dict[str, Any]:
         out: dict[str, Any] = {}
         for name in ("mock", "claude"):
             data = _json_file(f"reply_eval_{name}.json")
