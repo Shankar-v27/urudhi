@@ -16,6 +16,8 @@ and counting a rupee as recovered only when the payment rail says so.
 
 Built for the Razorpay AI Buildathon — Track 03: AI Revenue Recovery.
 
+🌐 **Live Demo Dashboard**: [https://urudhi.vercel.app](https://urudhi.vercel.app)
+
 ```
  messy human language ──▶ LLM: understand / extract / propose ──▶ typed, validated structure
         ──▶ deterministic policy + domain rules: allow / modify / block ──▶ execute approved action
@@ -214,7 +216,7 @@ brain never touched a balance, a link amount, or a commitment state.
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest -q                                   # 311 tests, offline, mock brain
+.venv/bin/pytest -q                                   # 339 tests, offline, mock brain
 
 # deterministic batch: three arms, uplift, attribution, sensitivity
 .venv/bin/python -m urudhi.sim --brain mock --arms all --db data/run.sqlite3
@@ -285,7 +287,7 @@ dashboard/      React: overview & experiment, invoices with "why" + commitment i
 data/           reply_eval.jsonl (labelled set), report/experiment JSON, reply_eval_*.json
 docs/           architecture.md
 scripts/        demo.py (terminal walk-through), live_demo.py (Razorpay test mode)
-tests/          311 tests: transitions, settlement, installments, commitments (lifecycle, payment
+tests/          339 tests: transitions, settlement, installments, commitments (lifecycle, payment
                 matching, expiry, cancellation, superseding, policy, memory, human arrangement,
                 audit), policy, interventions, brains
                 (Claude via a fake client: malformed / unknown / negative / excessive / past-date /
